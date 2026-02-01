@@ -1,13 +1,12 @@
 #include "preparedrace.h"
 
-#define PREPARED_RACE_EXPIRATION_TIME 120
-
-PreparedRace::PreparedRace(unsigned int id, const std::string & release, const std::string & section, const std::list<std::string> & sites) :
+PreparedRace::PreparedRace(unsigned int id, const std::string& name, const std::string& section, const std::list<std::pair<std::string, bool>>& sites, bool reset, int ttl) :
   id(id),
-  release(release),
+  name(name),
   section(section),
   sites(sites),
-  ttl(PREPARED_RACE_EXPIRATION_TIME) {
+  reset(reset),
+  ttl(ttl) {
 
 }
 
@@ -15,15 +14,19 @@ unsigned int PreparedRace::getId() const {
   return id;
 }
 
-const std::string & PreparedRace::getRelease() const {
-  return release;
+const std::string& PreparedRace::getName() const {
+  return name;
 }
 
-const std::string & PreparedRace::getSection() const {
+const std::string& PreparedRace::getSection() const {
   return section;
 }
 
-const std::list<std::string> & PreparedRace::getSites() const {
+bool PreparedRace::getReset() const {
+  return reset;
+}
+
+const std::list<std::pair<std::string, bool>>& PreparedRace::getSites() const {
   return sites;
 }
 

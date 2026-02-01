@@ -7,48 +7,68 @@
 #include "transferstatus.h"
 #include "localfilelist.h"
 #include "transferstatuscallback.h"
+#include "engine.h"
 
-#define MAX_TRANSFER_HISTORY 100
-
-extern GlobalContext * global;
-
-TransferManager::TransferManager() {
+TransferManager::TransferManager() : totalfinishedtransfers(0), maxtransferhistory(10000), maxtransfertimeseconds(0), nexttransferid(0) {
 }
 
 TransferManager::~TransferManager() {
 
 }
 
-void TransferManager::getFileList(SiteLogic * sl, int connid, bool hiddenfiles) {
-  Pointer<TransferMonitor> target = getAvailableTransferMonitor();
-  target->engageList(sl, connid, hiddenfiles);
+void TransferManager::getFileList(
+  const std::shared_ptr<SiteLogic> & sl, int connid, bool hiddenfiles, const std::shared_ptr<FileList>& fl, bool ipv6, const std::shared_ptr<CommandOwner> & co)
+{
+  std::shared_ptr<TransferMonitor> target = getAvailableTransferMonitor();
+  target->engageList(nexttransferid++, sl, connid, hiddenfiles, fl, co, ipv6);
 }
 
-Pointer<TransferStatus> TransferManager::suggestTransfer(std::string name, SiteLogic * src, FileList * fls, SiteLogic * dst, FileList * fld) {
-  return suggestTransfer(name, src, fls, name, dst, fld);
+std::shared_ptr<TransferStatus> TransferManager::attemptTransfer(
+  const std::string & name, const std::shared_ptr<SiteLogic> & src, const std::shared_ptr<FileList>& fls,
+  const std::shared_ptr<SiteLogic> & dst, const std::shared_ptr<FileList>& fld, const std::shared_ptr<CommandOwner> & srcco, const std::shared_ptr<CommandOwner> & dstco)
+{
+  return attemptTransfer(name, src, fls, name, dst, fld, srcco, dstco);
 }
 
-Pointer<TransferStatus> TransferManager::suggestTransfer(std::string srcname, SiteLogic * src, FileList * fls, std::string dstname, SiteLogic * dst, FileList * fld) {
-  Pointer<TransferMonitor> target = getAvailableTransferMonitor();
-  target->engageFXP(srcname, src, fls, dstname, dst, fld);
+std::shared_ptr<TransferStatus> TransferManager::attemptTransfer(
+  const std::string& srcname, const std::shared_ptr<SiteLogic>& src, const std::shared_ptr<FileList>& fls,
+  const std::string& dstname, const std::shared_ptr<SiteLogic>& dst, const std::shared_ptr<FileList>& fld,
+  const std::shared_ptr<CommandOwner>& srcco, const std::shared_ptr<CommandOwner>& dstco)
+{
+  std::shared_ptr<TransferMonitor> target = getAvailableTransferMonitor();
+  target->engageFXP(nexttransferid++, srcname, src, fls, dstname, dst, fld, srcco, dstco);
   return target->getTransferStatus();
 }
 
-Pointer<TransferStatus> TransferManager::suggestDownload(std::string name, SiteLogic * sl, FileList * filelist, Pointer<LocalFileList> & path) {
-  Pointer<TransferMonitor> target = getAvailableTransferMonitor();
-  target->engageDownload(name, sl, filelist, path);
+std::shared_ptr<TransferStatus> TransferManager::attemptDownload(
+  const std::string& name, const std::shared_ptr<SiteLogic>& sl, const std::shared_ptr<FileList>& fl,
+  const std::shared_ptr<LocalFileList>& localfl, const std::shared_ptr<CommandOwner> & co)
+{
+  std::shared_ptr<TransferMonitor> target = getAvailableTransferMonitor();
+  target->engageDownload(nexttransferid++, name, sl, fl, localfl, co);
   return target->getTransferStatus();
 }
 
-Pointer<TransferStatus> TransferManager::suggestUpload(std::string name, Pointer<LocalFileList> & path, SiteLogic * sl, FileList * filelist) {
-  Pointer<TransferMonitor> target = getAvailableTransferMonitor();
-  target->engageUpload(name, path, sl, filelist);
+std::shared_ptr<TransferStatus> TransferManager::attemptDownload(const std::string& name, const std::shared_ptr<SiteLogic>& sl,
+      int connid, const std::shared_ptr<FileList>& fls, const std::shared_ptr<LocalFileList>& localfl)
+{
+  std::shared_ptr<TransferMonitor> target = getAvailableTransferMonitor();
+  target->engageDownload(nexttransferid++, name, sl, fls, localfl, nullptr, connid);
   return target->getTransferStatus();
 }
 
-Pointer<TransferMonitor> TransferManager::getAvailableTransferMonitor() {
-  Pointer<TransferMonitor> target;
-  std::list<Pointer<TransferMonitor> >::iterator it;
+std::shared_ptr<TransferStatus> TransferManager::attemptUpload(
+  const std::string & name, const std::shared_ptr<LocalFileList> & path,
+  const std::shared_ptr<SiteLogic> & sl, const std::shared_ptr<FileList>& fl, const std::shared_ptr<CommandOwner> & co)
+{
+  std::shared_ptr<TransferMonitor> target = getAvailableTransferMonitor();
+  target->engageUpload(nexttransferid++, name, path, sl, fl, co);
+  return target->getTransferStatus();
+}
+
+std::shared_ptr<TransferMonitor> TransferManager::getAvailableTransferMonitor() {
+  std::shared_ptr<TransferMonitor> target;
+  std::list<std::shared_ptr<TransferMonitor> >::iterator it;
   for (it = transfermonitors.begin(); it != transfermonitors.end(); it++) {
     if ((*it)->idle()) {
       target = *it;
@@ -56,13 +76,13 @@ Pointer<TransferMonitor> TransferManager::getAvailableTransferMonitor() {
     }
   }
   if (!target) {
-    target = makePointer<TransferMonitor>(this);
+    target = std::make_shared<TransferMonitor>(this);
     transfermonitors.push_back(target);
   }
   return target;
 }
 
-void TransferManager::transferSuccessful(Pointer<TransferStatus> & ts) {
+void TransferManager::transferSuccessful(const std::shared_ptr<TransferStatus> & ts) {
   if (!!ts) {
     if (ts->isAwaited()) {
       global->getUIBase()->backendPush();
@@ -75,7 +95,7 @@ void TransferManager::transferSuccessful(Pointer<TransferStatus> & ts) {
   }
 }
 
-void TransferManager::transferFailed(Pointer<TransferStatus> & ts, int err) {
+void TransferManager::transferFailed(const std::shared_ptr<TransferStatus> & ts, int err) {
   if (!!ts) {
     if (ts->isAwaited()) {
       global->getUIBase()->backendPush();
@@ -84,39 +104,78 @@ void TransferManager::transferFailed(Pointer<TransferStatus> & ts, int err) {
     if (callback != NULL) {
       callback->transferFailed(ts, err);
     }
+    global->getEngine()->transferFailed(ts, err);
     moveTransferStatusToFinished(ts);
   }
 }
 
-std::list<Pointer<TransferStatus> >::const_iterator TransferManager::ongoingTransfersBegin() const {
+std::list<std::shared_ptr<TransferStatus> >::const_iterator TransferManager::ongoingTransfersBegin() const {
   return ongoingtransfers.begin();
 }
 
-std::list<Pointer<TransferStatus> >::const_iterator TransferManager::ongoingTransfersEnd() const {
+std::list<std::shared_ptr<TransferStatus> >::const_iterator TransferManager::ongoingTransfersEnd() const {
   return ongoingtransfers.end();
 }
 
-std::list<Pointer<TransferStatus> >::const_iterator TransferManager::finishedTransfersBegin() const {
+std::list<std::shared_ptr<TransferStatus> >::const_iterator TransferManager::finishedTransfersBegin() const {
   return finishedtransfers.begin();
 }
 
-std::list<Pointer<TransferStatus> >::const_iterator TransferManager::finishedTransfersEnd() const {
+std::list<std::shared_ptr<TransferStatus> >::const_iterator TransferManager::finishedTransfersEnd() const {
   return finishedtransfers.end();
 }
 
-void TransferManager::addNewTransferStatus(Pointer<TransferStatus> & ts) {
+unsigned int TransferManager::ongoingTransfersSize() const {
+  return ongoingtransfers.size();
+}
+
+unsigned int TransferManager::finishedTransfersSize() const {
+  return finishedtransfers.size();
+}
+
+void TransferManager::addNewTransferStatus(const std::shared_ptr<TransferStatus> & ts) {
   ongoingtransfers.push_front(ts);
 }
 
-void TransferManager::moveTransferStatusToFinished(Pointer<TransferStatus> & movets) {
-  for (std::list<Pointer<TransferStatus> >::iterator it = ongoingtransfers.begin(); it != ongoingtransfers.end(); it++) {
+void TransferManager::moveTransferStatusToFinished(const std::shared_ptr<TransferStatus> & movets) {
+  for (std::list<std::shared_ptr<TransferStatus> >::iterator it = ongoingtransfers.begin(); it != ongoingtransfers.end(); it++) {
     if (*it == movets) {
       ongoingtransfers.erase(it);
       break;
     }
   }
-  if (finishedtransfers.size() > MAX_TRANSFER_HISTORY) {
+  if (maxtransferhistory != -1 && finishedtransfers.size() > (unsigned int)maxtransferhistory) {
     finishedtransfers.pop_back();
   }
   finishedtransfers.push_front(movets);
+  ++totalfinishedtransfers;
+}
+
+unsigned int TransferManager::totalFinishedTransfers() const {
+  return totalfinishedtransfers;
+}
+
+int TransferManager::getMaxTransferHistory() const {
+  return maxtransferhistory;
+}
+
+void TransferManager::setMaxTransferHistory(int history) {
+  maxtransferhistory = history;
+}
+
+int TransferManager::getMaxTransferTimeSeconds() const {
+  return maxtransfertimeseconds;
+}
+
+void TransferManager::setMaxTransferTimeSeconds(int seconds) {
+  this->maxtransfertimeseconds = seconds;
+}
+
+void TransferManager::abortTransfer(int transferid) {
+  std::list<std::shared_ptr<TransferMonitor> >::iterator it;
+  for (it = transfermonitors.begin(); it != transfermonitors.end(); it++) {
+    if (!(*it)->idle() && (*it)->getTransferId() == transferid) {
+      (*it)->abortTransfer();
+    }
+  }
 }

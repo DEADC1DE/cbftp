@@ -3,29 +3,36 @@
 #include <string>
 #include <vector>
 
-#define READBLOCKSIZE 256
+#include "core/types.h"
+#include "path.h"
+
+enum class DataFileState {
+  NOT_EXISTING,
+  EXISTS_PLAIN,
+  EXISTS_ENCRYPTED,
+  EXISTS_DECRYPTED
+};
 
 class DataFileHandler {
 private:
-  unsigned char * rawdata;
-  int rawdatalen;
+  void parseDecryptedFile(const Core::BinaryData& data);
+  Core::BinaryData rawdata;
   std::vector<std::string> decryptedlines;
   std::vector<std::string> outputlines;
-  std::string path;
+  Path datafile;
   std::string key;
-  std::string filehash;
-  bool fileexists;
-  bool initialized;
+  Core::BinaryData filehash;
+  DataFileState state;
 public:
   DataFileHandler();
-  bool readEncrypted(std::string);
-  bool readPlain();
-  void newDataFile(std::string);
+  DataFileState getState() const;
+  bool tryDecrypt(const std::string& key);
   void writeFile();
-  bool changeKey(std::string, std::string);
-  bool fileExists() const;
-  bool isInitialized() const;
+  bool changeKey(const std::string& key, const std::string& newkey);
+  bool setEncrypted(const std::string& key);
+  bool setPlain(const std::string& key);
   void clearOutputData();
-  void addOutputLine(std::string, std::string);
-  void getDataFor(std::string, std::vector<std::string> *);
+  void addOutputLine(const std::string& owner, const std::string& line);
+  void getDataFor(const std::string& owner, std::vector<std::string>* matches);
+  static Path getDataDir();
 };

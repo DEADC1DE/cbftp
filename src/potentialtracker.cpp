@@ -5,32 +5,50 @@
 #include "potentialelement.h"
 #include "potentiallistelement.h"
 
-PotentialTracker::PotentialTracker(int slots) {
+PotentialTracker::PotentialTracker(int dnslots) : maxpotentialcalculated(true) {
   for (int i = 0; i < POTENTIALITY_SLICES; i++) {
-    potentiallist.push_back(new PotentialListElement(slots));
+    potentiallist.push_back(new PotentialListElement(dnslots));
   }
-  for (int i = 0; i < slots; i++) top.push_back(new PotentialElement());
+  for (int i = 0; i < dnslots; i++) {
+    top.push_back(new PotentialElement());
+  }
   global->getTickPoke()->startPoke(this, "PotentialTracker", POTENTIALITY_LIFESPAN / POTENTIALITY_SLICES, 0);
 }
 
 PotentialTracker::~PotentialTracker() {
   global->getTickPoke()->stopPoke(this, 0);
+  for (std::list<PotentialListElement *>::iterator it = potentiallist.begin(); it != potentiallist.end(); it++) {
+    delete *it;
+  }
+  for (std::list<PotentialElement *>::iterator it = top.begin(); it != top.end(); it++) {
+    delete *it;
+  }
 }
 
 int PotentialTracker::getMaxAvailablePotential() {
+  if (top.empty()) {
+    return 0;
+  }
+  if (!maxpotentialcalculated) {
+    calculateMaxAvailablePotential();
+  }
+  return top.front()->getPotential();
+}
+
+void PotentialTracker::calculateMaxAvailablePotential() {
   std::list<PotentialElement *>::iterator ittop;
   std::list<PotentialElement *>::iterator ittop2;
   std::list<PotentialListElement *>::iterator itple;
   std::vector<PotentialElement *>::iterator itpe;
   for (ittop = top.begin(); ittop != top.end(); ittop++) {
-    (*ittop)->update(NULL, 0, 0, "");
+    (*ittop)->reset();
   }
   for (itple = potentiallist.begin(); itple != potentiallist.end(); itple++) {
     std::vector<PotentialElement *> & pelist = (*itple)->getSlotsVector();
     for (itpe = pelist.begin(); itpe != pelist.end(); itpe++) {
       PotentialElement * mpe;
       std::list<PotentialElement *>::iterator itrpe = top.begin();
-      if ((*itpe)->getSite() != NULL && allTopSlotsUsedForSite(*itpe)) {
+      if (!!(*itpe)->getSite() && allTopSlotsUsedForSite(*itpe)) {
         itrpe = findFirstOfSite((*itpe)->getSite());
       }
       mpe = *itrpe;
@@ -52,33 +70,35 @@ int PotentialTracker::getMaxAvailablePotential() {
           if (duplicate) break;
           top.insert(ittop, mpe);
           top.erase(itrpe);
-          mpe->update((*itpe)->getSite(), (*itpe)->getSiteDownloadSlots(), (*itpe)->getPotential(), (*itpe)->getFileName());
+          mpe->update((*itpe)->getSite(), (*itpe)->getDestinationSiteUploadSlots(), (*itpe)->getPotential(), (*itpe)->getFileName());
           inserted = true;
           break;
         }
       }
       if (!lowscore && !duplicate && !inserted && (*itpe)->getPotential() >= top.back()->getPotential()) {
-        top.push_back(mpe);
         top.erase(itrpe);
-        mpe->update((*itpe)->getSite(), (*itpe)->getSiteDownloadSlots(), (*itpe)->getPotential(), (*itpe)->getFileName());
+        top.push_back(mpe);
+        mpe->update((*itpe)->getSite(), (*itpe)->getDestinationSiteUploadSlots(), (*itpe)->getPotential(), (*itpe)->getFileName());
       }
     }
   }
-  int ret = top.front()->getPotential();
-  return ret;
+  maxpotentialcalculated = true;
 }
 
-PotentialListElement * PotentialTracker::getFront() const {
-  return potentiallist.front();
+void PotentialTracker::pushPotential(int score, const std::string & file, const std::shared_ptr<SiteLogic> & dst, int dstup) {
+  if (potentiallist.front()->update(dst, dstup, score, file)) {
+    maxpotentialcalculated = false;
+  }
 }
 
 void PotentialTracker::tick(int message) {
   potentiallist.back()->reset();
   potentiallist.push_front(potentiallist.back());
   potentiallist.pop_back();
+  maxpotentialcalculated = false;
 }
 
-std::list<PotentialElement *>::iterator PotentialTracker::findFirstOfSite(SiteLogic * st) {
+std::list<PotentialElement *>::iterator PotentialTracker::findFirstOfSite(const std::shared_ptr<SiteLogic> & st) {
   std::list<PotentialElement *>::iterator ittop;
   for (ittop = top.begin(); ittop != top.end(); ittop++) {
     if ((*ittop)->getSite() == st) return ittop;
@@ -86,8 +106,22 @@ std::list<PotentialElement *>::iterator PotentialTracker::findFirstOfSite(SiteLo
   return top.end();
 }
 
+void PotentialTracker::updateSlots(int dnslots) {
+  for (std::list<PotentialListElement *>::iterator it = potentiallist.begin(); it != potentiallist.end(); it++) {
+    (*it)->updateSlots(dnslots);
+  }
+  while ((int)top.size() > dnslots) {
+    delete top.back();
+    top.pop_back();
+  }
+  while ((int)top.size() < dnslots) {
+    top.push_back(new PotentialElement());
+  }
+  maxpotentialcalculated = false;
+}
+
 bool PotentialTracker::allTopSlotsUsedForSite(PotentialElement * pe) const {
-  int threads = pe->getSiteDownloadSlots();
+  int dstupslots = pe->getDestinationSiteUploadSlots();
   int sitematch = 0;
   std::list<PotentialElement *>::const_iterator ittop;
   for (ittop = top.begin(); ittop != top.end(); ittop++) {
@@ -95,6 +129,6 @@ bool PotentialTracker::allTopSlotsUsedForSite(PotentialElement * pe) const {
       sitematch++;
     }
   }
-  if (sitematch == threads) return true;
+  if (sitematch == dstupslots) return true;
   return false;
 }

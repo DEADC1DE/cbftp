@@ -13,27 +13,38 @@
 #include "../menuselectoptionelement.h"
 #include "../focusablearea.h"
 
-extern GlobalContext * global;
+namespace {
 
-NewRaceScreen::NewRaceScreen(Ui * ui) {
-  this->ui = ui;
+enum KeyAction {
+  KEYACTION_START,
+  KEYACTION_START_RETURN,
+};
+
+}
+
+NewRaceScreen::NewRaceScreen(Ui * ui) : UIWindow(ui, "NewRaceScreen"), msos(*vv), mso(*vv) {
+  keybinds.addBind(10, KEYACTION_ENTER, "Modify");
+  keybinds.addBind('s', KEYACTION_START, "Start spread job");
+  keybinds.addBind('S', KEYACTION_START_RETURN, "Start spread job and return to browsing");
+  keybinds.addBind('t', KEYACTION_TOGGLE_ALL, "Toggle all");
+  keybinds.addBind(KEY_DOWN, KEYACTION_DOWN, "Navigate down");
+  keybinds.addBind(KEY_UP, KEYACTION_UP, "Navigate up");
+  keybinds.addBind(KEY_LEFT, KEYACTION_LEFT, "Navigate left");
+  keybinds.addBind(KEY_RIGHT, KEYACTION_RIGHT, "Navigate right");
+  keybinds.addBind(KEY_PPAGE, KEYACTION_PREVIOUS_PAGE, "Page up");
+  keybinds.addBind(KEY_NPAGE, KEYACTION_NEXT_PAGE, "Page down");
+  keybinds.addBind('c', KEYACTION_BACK_CANCEL, "Cancel");
 }
 
 NewRaceScreen::~NewRaceScreen() {
 
 }
 
-void NewRaceScreen::initialize(unsigned int row, unsigned int col, std::string site, std::string section, std::string release) {
-  defaultlegendtext = "[Enter] Modify - [Down] Next option - [Up] Previous option - [t]oggle all - [s]tart race - [S]tart race and return to browsing - [c]ancel";
-  currentlegendtext = defaultlegendtext;
-  active = false;
+void NewRaceScreen::initialize(unsigned int row, unsigned int col, const std::string & site, const std::list<std::string> & sections, const std::list<std::pair<std::string, bool> > & items) {
   toggleall = false;
   unsigned int y = 2;
   unsigned int x = 1;
-  sectionupdate = false;
   infotext = "";
-  std::string sectionstring = section;
-  size_t splitpos;
   bool sectionset = false;
   int sectx = x + std::string("Section: ").length();
   msos.reset();
@@ -41,28 +52,18 @@ void NewRaceScreen::initialize(unsigned int row, unsigned int col, std::string s
   msota->addOption("Race", SPREAD_RACE);
   msota->addOption("Distribute", SPREAD_DISTRIBUTE);
   msota->setId(1);
-  while (sectionstring.length() > 0) {
-    splitpos = sectionstring.find(";");
-    std::string section;
-    if (splitpos != std::string::npos) {
-      section = sectionstring.substr(0, splitpos);
-      sectionstring = sectionstring.substr(splitpos + 1);
-    }
-    else {
-      section = sectionstring;
-      sectionstring = "";
-    }
-    std::string buttontext = " " + section + " ";
+  for (std::list<std::string>::const_iterator it = sections.begin(); it != sections.end(); it++) {
     if (!sectionset) {
-      this->section = section;
+      this->section = *it;
       sectionset = true;
     }
-    Pointer<MenuSelectOptionTextButton> msotb = msos.addTextButton(y, sectx, section, buttontext);
+    std::string buttontext = " " + *it + " ";
+    std::shared_ptr<MenuSelectOptionTextButton> msotb = msos.addTextButton(y, sectx, *it, buttontext);
     msotb->setId(0);
     sectx = sectx + buttontext.length();
   }
   y = y + 2;
-  this->release = release;
+  this->items = items;
   startsite = global->getSiteManager()->getSite(site);
   focusedarea = &msos;
   msos.makeLeavableDown();
@@ -74,12 +75,19 @@ void NewRaceScreen::initialize(unsigned int row, unsigned int col, std::string s
 }
 
 void NewRaceScreen::populateSiteList() {
-  std::vector<Site *>::const_iterator it;
+  std::vector<std::shared_ptr<Site> >::const_iterator it;
   mso.clear();
   if (!tempsites.size()) {
     for (it = global->getSiteManager()->begin(); it != global->getSiteManager()->end(); it++) {
-      Site * site = *it;
-      if (site->hasSection(section) && !site->getDisabled()) {
+      const std::shared_ptr<Site> & site = *it;
+      bool allowed = true;
+      for (std::list<std::pair<std::string, bool> >::const_iterator itemit = items.begin(); itemit != items.end(); itemit++) {
+        if (site->getSkipList().check((site->getSectionPath(section) / itemit->first).toString(), true, false).action == SKIPLIST_DENY) {
+          allowed = false;
+          break;
+        }
+      }
+      if (site->hasSection(section) && !site->getDisabled() && allowed) {
         tempsites.push_back(std::pair<std::string, bool>(site->getName(), toggleall || site == startsite));
       }
     }
@@ -103,119 +111,51 @@ void NewRaceScreen::populateSiteList() {
 }
 
 void NewRaceScreen::redraw() {
-  ui->erase();
+  vv->clear();
   for (unsigned int i = 0; i < mso.size(); i++) {
-    Pointer<MenuSelectOptionCheckBox> msocb = mso.getElement(i);
+    std::shared_ptr<MenuSelectOptionCheckBox> msocb = std::static_pointer_cast<MenuSelectOptionCheckBox>(mso.getElement(i));
     tempsites.push_back(std::pair<std::string, bool>(msocb->getIdentifier(), msocb->getData()));
   }
   populateSiteList();
-  ui->printStr(1, 1, "Release: " + release);
-  ui->printStr(3, 1, "Section: ");
+  std::string item = items.front().first;
+  if (items.size() > 1) {
+    item = std::to_string(static_cast<int>(items.size())) + " items";
+  }
+  vv->putStr(1, 1, "Item: " + item);
+  vv->putStr(3, 1, "Section: ");
   bool highlight;
   for (unsigned int i = 0; i < msos.size(); i++) {
-    Pointer<MenuSelectOptionElement> msoe = msos.getElement(i);
+    std::shared_ptr<MenuSelectOptionElement> msoe = msos.getElement(i);
     highlight = false;
     if (msos.isFocused() && msos.getSelectionPointer() == i) {
       highlight = true;
     }
     if (msoe->getId() == 0) {
-      ui->printStr(msoe->getRow(), msoe->getCol(), getSectionButtonText(msoe), highlight);
+      vv->putStr(msoe->getRow(), msoe->getCol(), getSectionButtonText(msoe), highlight);
     }
     else {
-      ui->printStr(msoe->getRow(), msoe->getCol(), msoe->getLabelText(), highlight);
-      ui->printStr(msoe->getRow(), msoe->getCol() + msoe->getLabelText().length() + 1, msoe->getContentText());
+      vv->putStr(msoe->getRow(), msoe->getCol(), msoe->getLabelText(), highlight);
+      vv->putStr(msoe->getRow(), msoe->getCol() + msoe->getLabelText().length() + 1, msoe->getContentText());
     }
   }
   for (unsigned int i = 0; i < mso.size(); i++) {
-    Pointer<MenuSelectOptionElement> msoe = mso.getElement(i);
+    std::shared_ptr<MenuSelectOptionElement> msoe = mso.getElement(i);
     highlight = false;
     if (mso.isFocused() && mso.getSelectionPointer() == i) {
       highlight = true;
     }
-    ui->printStr(msoe->getRow(), msoe->getCol() + msoe->getContentText().length() + 1, msoe->getLabelText(), highlight);
-    ui->printStr(msoe->getRow(), msoe->getCol(), msoe->getContentText());
-  }
-}
-
-void NewRaceScreen::update() {
-  if (sectionupdate) {
-    sectionupdate = false;
-    tempsites.clear();
-    mso.clear();
-    redraw();
-    return;
-  }
-  if (defocusedarea != NULL) {
-    if (defocusedarea == &mso) {
-      Pointer<MenuSelectOptionElement> msoe = mso.getElement(mso.getLastSelectionPointer());
-      ui->printStr(msoe->getRow(), msoe->getCol() + msoe->getContentText().length() + 1, msoe->getLabelText());
-      ui->printStr(msoe->getRow(), msoe->getCol(), msoe->getContentText());
-    }
-    else if (defocusedarea == &msos){
-      Pointer<MenuSelectOptionElement> msoe = msos.getElement(msos.getLastSelectionPointer());
-      if (msoe->getId() == 0) {
-        ui->printStr(msoe->getRow(), msoe->getCol(), getSectionButtonText(msoe));
-      }
-      else {
-        ui->printStr(msoe->getRow(), msoe->getCol(), msoe->getLabelText());
-        ui->printStr(msoe->getRow(), msoe->getCol() + msoe->getLabelText().length() + 1, msoe->getContentText());
-      }
-    }
-  }
-  if (focusedarea == &mso) {
-    Pointer<MenuSelectOptionElement> msoe = mso.getElement(mso.getLastSelectionPointer());
-    ui->printStr(msoe->getRow(), msoe->getCol() + msoe->getContentText().length() + 1, msoe->getLabelText());
-    ui->printStr(msoe->getRow(), msoe->getCol(), msoe->getContentText());
-    msoe = mso.getElement(mso.getSelectionPointer());
-    ui->printStr(msoe->getRow(), msoe->getCol() + msoe->getContentText().length() + 1, msoe->getLabelText(), true);
-    ui->printStr(msoe->getRow(), msoe->getCol(), msoe->getContentText());
-    if (active && msoe->cursorPosition() >= 0) {
-      ui->showCursor();
-      ui->moveCursor(msoe->getRow(), msoe->getCol() + msoe->getContentText().length() + 1 + msoe->cursorPosition());
-    }
-    else {
-      ui->hideCursor();
-    }
-  }
-  else {
-    Pointer<MenuSelectOptionElement> msoe = msos.getElement(msos.getLastSelectionPointer());
-    if (msoe->getId() == 0) {
-      ui->printStr(msoe->getRow(), msoe->getCol(), getSectionButtonText(msoe));
-    }
-    else {
-      ui->printStr(msoe->getRow(), msoe->getCol(), msoe->getLabelText());
-      ui->printStr(msoe->getRow(), msoe->getCol() + msoe->getLabelText().length() + 1, msoe->getContentText());
-    }
-    msoe = msos.getElement(msos.getSelectionPointer());
-    if (msoe->getId() == 0) {
-      ui->printStr(msoe->getRow(), msoe->getCol(), getSectionButtonText(msoe), true);
-    }
-    else {
-      ui->printStr(msoe->getRow(), msoe->getCol(), msoe->getLabelText(), true);
-      ui->printStr(msoe->getRow(), msoe->getCol() + msoe->getLabelText().length() + 1, msoe->getContentText());
-    }
+    vv->putStr(msoe->getRow(), msoe->getCol() + msoe->getContentText().length() + 1, msoe->getLabelText(), highlight);
+    vv->putStr(msoe->getRow(), msoe->getCol(), msoe->getContentText());
   }
 }
 
 bool NewRaceScreen::keyPressed(unsigned int ch) {
+  int action = keybinds.getKeyAction(ch);
   infotext = "";
   unsigned int pagerows = (unsigned int) (row - 6) * 0.6;
-  if (active) {
-    if (ch == 10) {
-      activeelement->deactivate();
-      active = false;
-      currentlegendtext = defaultlegendtext;
-      ui->update();
-      ui->setLegend();
-      return true;
-    }
-    activeelement->inputChar(ch);
-    ui->update();
-    return true;
-  }
   bool activation;
-  switch(ch) {
-    case KEY_UP:
+  switch(action) {
+    case KEYACTION_UP:
       if (focusedarea->goUp() || focusedarea->goPrevious()) {
         if (!focusedarea->isFocused()) {
           defocusedarea = focusedarea;
@@ -223,9 +163,10 @@ bool NewRaceScreen::keyPressed(unsigned int ch) {
           focusedarea->enterFocusFrom(2);
         }
         ui->update();
+        return true;
       }
-      return true;
-    case KEY_DOWN:
+      return false;
+    case KEYACTION_DOWN:
       if (focusedarea->goDown() || focusedarea->goNext()) {
         if (!focusedarea->isFocused()) {
           defocusedarea = focusedarea;
@@ -233,25 +174,28 @@ bool NewRaceScreen::keyPressed(unsigned int ch) {
           focusedarea->enterFocusFrom(0);
         }
         ui->update();
+        return true;
       }
-      return true;
-    case KEY_LEFT:
+      return false;
+    case KEYACTION_LEFT:
       if (focusedarea->goLeft()) {
         if (!focusedarea->isFocused()) {
           // shouldn't happen
         }
         ui->update();
+        return true;
       }
-      return true;
-    case KEY_RIGHT:
+      return false;
+    case KEYACTION_RIGHT:
       if (focusedarea->goRight()) {
         if (!focusedarea->isFocused()) {
           // shouldn't happen
         }
         ui->update();
+        return true;
       }
-      return true;
-    case KEY_NPAGE:
+      return false;
+    case KEYACTION_NEXT_PAGE:
       for (unsigned int i = 0; i < pagerows; i++) {
         if (focusedarea->goDown()) {
           if (!focusedarea->isFocused()) {
@@ -263,7 +207,7 @@ bool NewRaceScreen::keyPressed(unsigned int ch) {
       }
       ui->redraw();
       return true;
-    case KEY_PPAGE:
+    case KEYACTION_PREVIOUS_PAGE:
       for (unsigned int i = 0; i < pagerows; i++) {
         if (focusedarea->goUp()) {
           if (!focusedarea->isFocused()) {
@@ -275,47 +219,51 @@ bool NewRaceScreen::keyPressed(unsigned int ch) {
       }
       ui->redraw();
       return true;
-    case 10:
-
+    case KEYACTION_ENTER:
       activation = focusedarea->getElement(focusedarea->getSelectionPointer())->activate();
       if (!activation) {
         if (focusedarea == &msos) {
-          Pointer<MenuSelectOptionElement> msoe = msos.getElement(msos.getSelectionPointer());
+          std::shared_ptr<MenuSelectOptionElement> msoe = msos.getElement(msos.getSelectionPointer());
           if (msoe->getId() == 0) {
             section = msoe->getIdentifier();
-            sectionupdate = true;
+            tempsites.clear();
+            mso.clear();
           }
         }
-        ui->update();
+        ui->redraw();
         return true;
       }
       active = true;
       activeelement = focusedarea->getElement(focusedarea->getSelectionPointer());
-      currentlegendtext = activeelement->getLegendText();
       ui->update();
       ui->setLegend();
       return true;
-    case 27: // esc
-    case 'c':
+    case KEYACTION_BACK_CANCEL:
       ui->returnToLast();
       return true;
-    case 's':
+    case KEYACTION_START:
     {
-      Pointer<Race> race = startRace();
-      if (!!race) {
-        ui->returnRaceStatus(race->getId());
+      bool goracestatus = items.size() == 1;
+      JobStartResult result = startRace(!goracestatus);
+      if (result) {
+        if (goracestatus) {
+          ui->returnRaceStatus(result.id);
+        }
+        else {
+          ui->returnToLast();
+        }
       }
       return true;
     }
-    case 'S':
+    case KEYACTION_START_RETURN:
     {
-      Pointer<Race> race = startRace();
-      if (!!race) {
+      JobStartResult result = startRace(true);
+      if (result) {
         ui->returnToLast();
       }
       return true;
     }
-    case 't':
+    case KEYACTION_TOGGLE_ALL:
       toggleall = !toggleall;
       populateSiteList();
       ui->redraw();
@@ -324,19 +272,15 @@ bool NewRaceScreen::keyPressed(unsigned int ch) {
   return false;
 }
 
-std::string NewRaceScreen::getLegendText() const {
-  return currentlegendtext;
-}
-
 std::string NewRaceScreen::getInfoLabel() const {
-  return "START NEW RACE";
+  return "START NEW SPREAD JOB";
 }
 
 std::string NewRaceScreen::getInfoText() const {
   return infotext;
 }
 
-std::string NewRaceScreen::getSectionButtonText(Pointer<MenuSelectOptionElement> msoe) const {
+std::string NewRaceScreen::getSectionButtonText(std::shared_ptr<MenuSelectOptionElement> msoe) const {
   std::string buttontext = msoe->getLabelText();
   if (msoe->getIdentifier() == section) {
     buttontext[0] = '[';
@@ -345,24 +289,37 @@ std::string NewRaceScreen::getSectionButtonText(Pointer<MenuSelectOptionElement>
   return buttontext;
 }
 
-Pointer<Race> NewRaceScreen::startRace() {
-  msota->getData();
+JobStartResult NewRaceScreen::startRace(bool addtemplegend) {
   std::list<std::string> sites;
+  JobStartResult lastresult("No spread job started");
   for (unsigned int i = 0; i < mso.size(); i++) {
-    Pointer<MenuSelectOptionCheckBox> msocb = mso.getElement(i);
+    std::shared_ptr<MenuSelectOptionCheckBox> msocb = std::static_pointer_cast<MenuSelectOptionCheckBox>(mso.getElement(i));
     if (msocb->getData()) {
       sites.push_back(msocb->getIdentifier());
     }
   }
   if (sites.size() < 2) {
-    infotext = "Cannot start race with less than 2 sites!";
-    ui->update();
-    return Pointer<Race>();
+    std::string error = "Cannot start spread job with less than 2 sites!";
+    ui->goInfo(error);
+    return JobStartResult(error);
   }
-  if (msota->getData() == SPREAD_RACE) {
-    return global->getEngine()->newRace(release, section, sites);
+
+  for (std::list<std::pair<std::string, bool> >::const_iterator itemit = items.begin(); itemit != items.end(); itemit++) {
+    if (msota->getData() == SPREAD_RACE) {
+      JobStartResult result = global->getEngine()->newRace(itemit->first, section, sites, false);
+      if (result) {
+        lastresult = result;
+      }
+    }
+    else {
+      JobStartResult result = global->getEngine()->newDistribute(itemit->first, section, sites, false);
+      if (result) {
+        lastresult = result;
+      }
+    }
   }
-  else {
-    return global->getEngine()->newDistribute(release, section, sites);
+  if (addtemplegend && lastresult) {
+    ui->addTempLegendSpreadJob(lastresult.id);
   }
+  return lastresult;
 }

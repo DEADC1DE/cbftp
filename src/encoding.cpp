@@ -4,11 +4,11 @@
 
 namespace encoding {
 
-std::map<unsigned char, unsigned int> getCP437toUnicodeMap();
-static std::map<unsigned char, unsigned int> cp437unicode = getCP437toUnicodeMap();
+std::map<unsigned char, char32_t> getCP437toUnicodeMap();
+static std::map<unsigned char, char32_t> cp437unicode = getCP437toUnicodeMap();
 
-unsigned int cp437toUnicode(unsigned char c) {
-  std::map<unsigned char, unsigned int>::iterator it = cp437unicode.find(c);
+char32_t cp437toUnicode(unsigned char c) {
+  std::map<unsigned char, char32_t>::iterator it = cp437unicode.find(c);
   return it != cp437unicode.end() ? it->second : c;
 }
 
@@ -27,21 +27,21 @@ unsigned int harddoublecp437toUnicode(unsigned char c) {
   return cp437toUnicode(c);
 }
 
-bool certainlyASCII(unsigned int c) {
+bool certainlyASCII(char32_t c) {
   // some uncertain chars, may be misconverted in double cp437
   return c != 'U' && c != 'Y' && c != '_' && c != ' ' && c < 0x80;
 }
 
-std::basic_string<unsigned int> cp437toUnicode(const std::string & in) {
-  std::basic_string<unsigned int> out;
+std::basic_string<char32_t> cp437toUnicode(const std::string& in) {
+  std::basic_string<char32_t> out;
   for (unsigned int i = 0; i < in.length(); i++) {
     out.push_back(cp437toUnicode(in[i]));
   }
   return out;
 }
 
-std::basic_string<unsigned int> doublecp437toUnicode(const std::string & in) {
-  std::basic_string<unsigned int> out;
+std::basic_string<char32_t> doublecp437toUnicode(const std::string& in) {
+  std::basic_string<char32_t> out;
   for (unsigned int i = 0; i < in.length(); i++) {
     if ((i > 0 && certainlyASCII(in[i - 1])) || (i < in.length() - 1 && certainlyASCII(in[i + 1]))) {
       out.push_back(in[i]);
@@ -53,65 +53,143 @@ std::basic_string<unsigned int> doublecp437toUnicode(const std::string & in) {
   return out;
 }
 
-std::basic_string<unsigned int> toUnicode(const std::string & in) {
-  std::basic_string<unsigned int> out;
+std::basic_string<char32_t> toUnicode(const std::string& in) {
+  std::basic_string<char32_t> out;
   for (unsigned int i = 0; i < in.length(); i++) {
-    out.push_back(static_cast<unsigned char>(in[i]));
+    out.push_back(static_cast<char32_t>(static_cast<unsigned char>(in[i])));
   }
   return out;
 }
 
-Encoding guessEncoding(const BinaryData & data) {
-  int hitcharsinrow = 0;
-  bool hitbefore = false;
-  int maxcp437charsinrow = 0;
+template <typename T>
+bool isCurrentPosValidUTF8(const T& in, unsigned int pos,
+                           char32_t& unicodepoint,
+                           unsigned int& bytes)
+{
+  if (pos >= in.size()) {
+    return false;
+  }
+  else if ((in[pos] & 0x80) == 0) {
+    unicodepoint = in[pos];
+    bytes = 1;
+    return true;
+  }
+  else if ((in[pos] & 0xE0) == 0xC0 && // 2-byte char
+      pos + 1 < in.size() &&
+      (in[pos + 1] & 0xC0) == 0x80)
+  {
+    unicodepoint = ((in[pos] & 0x1F) << 6) | (in[pos + 1] & 0x3F);
+    bytes = 2;
+    return true;
+  }
+  else if ((in[pos] & 0xF0) == 0xE0 && // 3-byte char
+           pos + 2 < in.size() &&
+           (in[pos + 1] & 0xC0) == 0x80 &&
+           (in[pos + 2] & 0xC0) == 0x80)
+  {
+    unicodepoint = (((in[pos] & 0xF) << 12) |
+                   ((in[pos + 1] & 0x3F) << 6) |
+                   (in[pos + 2] & 0x3F));
+    bytes = 3;
+    return true;
+  }
+  else if ((in[pos] & 0xF8) == 0xF0 && // 4-byte char
+           pos + 3 < in.size() &&
+           (in[pos + 1] & 0xC0) == 0x80 &&
+           (in[pos + 2] & 0xC0) == 0x80 &&
+           (in[pos + 3] & 0xC0) == 0x80)
+  {
+    unicodepoint = (((in[pos] & 0x7) << 18) |
+                   ((in[pos + 1] & 0x3F) << 12) |
+                   ((in[pos + 2] & 0x3F) << 6) |
+                   (in[pos + 3] & 0x3F));
+    bytes = 4;
+    return true;
+  }
+  return false;
+}
+
+std::basic_string<char32_t> utf8toUnicode(const std::string& in) {
+  std::basic_string<char32_t> out;
+  for (unsigned int i = 0; i < in.length(); i++) {
+    char32_t unicodepoint;
+    unsigned int bytes;
+    if (isCurrentPosValidUTF8(in, i, unicodepoint, bytes)) {
+      out.push_back(unicodepoint);
+      i += bytes - 1;
+    }
+    else {
+      out.push_back('?'); // unknown/broken char
+    }
+  }
+  return out;
+}
+
+Encoding guessEncoding(const Core::BinaryData& data) {
+  int cp437hitcharsinrow = 0;
+  bool cp437hitbefore = false;
+  int cp437maxcharsinrow = 0;
+  int doublecp437hitcharsinrow = 0;
+  bool doublecp437hitbefore = false;
+  int doublecp437maxcharsinrow = 0;
+  int validmultibyteutf8 = 0;
+  int invalidutf8 = 0;
   for (unsigned int i = 0; i < data.size(); i++) {
     if (data[i] == 0xDB || data[i] == 0xDC || data[i] == 0xDD ||
         data[i] == 0xDE || data[i] == 0xDF || data[i] == 0xB0 ||
         data[i] == 0xB1 || data[i] == 0xB2) // most common ANSI drawing chars
     {
-      if (hitbefore) {
-        ++hitcharsinrow;
+      if (cp437hitbefore) {
+        ++cp437hitcharsinrow;
       }
       else {
-        if (hitcharsinrow > maxcp437charsinrow) {
-          maxcp437charsinrow = hitcharsinrow;
+        if (cp437hitcharsinrow > cp437maxcharsinrow) {
+          cp437maxcharsinrow = cp437hitcharsinrow;
         }
-        hitcharsinrow = 1;
-        hitbefore = true;
+        cp437hitcharsinrow = 1;
+        cp437hitbefore = true;
       }
     }
     else {
-      hitbefore = false;
+      cp437hitbefore = false;
     }
-  }
-  hitcharsinrow = 0;
-  hitbefore = false;
-  int maxdoublecp437charsinrow = 0;
-  for (unsigned int i = 0; i < data.size(); i++) {
     if (data[i] == 0x9A || data[i] == 0xE1 || data[i] == 0xF8 ||
         data[i] == 0xF1 || data[i] == 0xFD) // signs of double cp437
     {
-      if (hitbefore) {
-        ++hitcharsinrow;
+      if (doublecp437hitbefore) {
+        ++doublecp437hitcharsinrow;
       }
       else {
-        if (hitcharsinrow > maxdoublecp437charsinrow) {
-          maxdoublecp437charsinrow = hitcharsinrow;
+        if (doublecp437hitcharsinrow > doublecp437maxcharsinrow) {
+          doublecp437maxcharsinrow = doublecp437hitcharsinrow;
         }
-        hitcharsinrow = 1;
-        hitbefore = true;
+        doublecp437hitcharsinrow = 1;
+        doublecp437hitbefore = true;
       }
     }
     else {
-      hitbefore = false;
+      doublecp437hitbefore = false;
+    }
+    if (data[i] >= 128) {
+      char32_t unicodepoint;
+      unsigned int bytes;
+      if (isCurrentPosValidUTF8(data, i, unicodepoint, bytes)) {
+        ++validmultibyteutf8;
+        i += bytes - 1;
+      }
+      else {
+        ++invalidutf8;
+      }
     }
   }
 
-  if (maxcp437charsinrow >= 3 && maxcp437charsinrow >= maxdoublecp437charsinrow) {
+  if (validmultibyteutf8 > invalidutf8) {
+    return ENCODING_UTF8;
+  }
+  else if (cp437maxcharsinrow >= 3 && cp437maxcharsinrow >= doublecp437maxcharsinrow) {
     return ENCODING_CP437;
   }
-  else if (maxdoublecp437charsinrow >= 3) {
+  else if (doublecp437maxcharsinrow >= 3) {
     return ENCODING_CP437_DOUBLE;
   }
   else {
@@ -119,8 +197,8 @@ Encoding guessEncoding(const BinaryData & data) {
   }
 }
 
-std::map<unsigned char, unsigned int> getCP437toUnicodeMap() {
-  std::map<unsigned char, unsigned int> map;
+std::map<unsigned char, char32_t> getCP437toUnicodeMap() {
+  std::map<unsigned char, char32_t> map;
   map[0x80] = 0x00C7;
   map[0x81] = 0x00FC;
   map[0x82] = 0x00E9;

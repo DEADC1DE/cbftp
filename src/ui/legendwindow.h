@@ -1,26 +1,28 @@
 #pragma once
 
+#include <list>
+#include <memory>
 #include <string>
 
 #include "uiwindow.h"
 
-struct _win_st;
-typedef struct _win_st WINDOW;
+class LegendPrinter;
 
 class LegendWindow : public UIWindow {
 public:
-  LegendWindow(Ui *, WINDOW *, int, int);
+  LegendWindow(Ui* ui, unsigned int row, unsigned int col);
   void redraw();
   void update();
-  void setText(std::string);
-  void setSplit(bool);
+  void setSplit(bool split);
+  void setMainLegendPrinter(std::shared_ptr<LegendPrinter> printer);
+  void addTempLegendPrinter(std::shared_ptr<LegendPrinter> printer);
+  void clearTempLegendPrinters();
 private:
-  std::string text;
   int latestid;
   int latestcount;
   int staticcount;
   std::string latesttext;
-  unsigned int offset;
   bool split;
-  WINDOW * window;
+  std::shared_ptr<LegendPrinter> mainlegendprinter;
+  std::list<std::shared_ptr<LegendPrinter> > templegendprinters;
 };

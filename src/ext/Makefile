@@ -1,23 +1,25 @@
 -include ../../Makefile.inc
 
-SRC = $(wildcard *.cpp)
+SRC_C = $(wildcard *.c)
+SRC_CPP = $(wildcard *.cpp)
+OBJS = $(SRC_C:%.c=%.o) $(SRC_CPP:%.cpp=%.o)
 LIB = libext.a
-CLEANFILES = $(wildcard $(SRC:%.cpp=%.o) $(SRC:%.cpp=%.d) $(LIB))
+CLEANFILES = $(wildcard $(OBJS) $(OBJS:%.o=%.d) $(LIB))
 
-all: $(SRC:%.cpp=%.o)
-	@+${MAKE} --no-print-directory $(LIB)
+all: $(OBJS)
+	@+$(MAKE) --no-print-directory $(LIB)
 
 quiet:
 	@#
-	
-$(LIB): $(SRC:%.cpp=%.o) | quiet
-	ar rc $@ $^ && ranlib $@
+
+$(LIB): $(OBJS) | quiet
+	$(AR) rc $@ $^ && $(RANLIB) $@
 
 clean:
 	@if test $(firstword $(CLEANFILES)); then rm -rf $(CLEANFILES); echo rm -rf $(CLEANFILES); fi
 
 ifneq ($(wildcard ../../Makefile.inc),)
-$(SRC:%.cpp=%.o): ../../Makefile.inc
+$(OBJS): ../../Makefile.inc
 endif
 
--include $(SRC:%.cpp=%.d)
+#-include $(OBJS:%.o=%.d)

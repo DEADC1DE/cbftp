@@ -1,37 +1,46 @@
 #pragma once
 
+#include <memory>
 #include <string>
-#include <map>
 #include <list>
 #include <vector>
+#include <utility>
+
+#include "path.h"
 
 class FileList;
 
-#define RCL_DELETE 0
-#define RCL_DELETEOWN 1
-#define RCL_TRANSFER 2
+enum RecursiveCommandType {
+  RCL_DELETE,
+  RCL_DELETEOWN,
+  RCL_TRANSFER
+};
 
-#define RCL_ACTION_LIST 1354
-#define RCL_ACTION_CWD 1355
-#define RCL_ACTION_DELETE 1356
+enum RecursiveCommandLogicAction {
+  RCL_ACTION_LIST,
+  RCL_ACTION_CWD,
+  RCL_ACTION_DELETE,
+  RCL_ACTION_DELDIR,
+  RCL_ACTION_NOOP,
+};
 
 class RecursiveCommandLogic {
 private:
-  int mode;
+  RecursiveCommandType mode;
   bool active;
-  std::string basepath;
-  std::string target;
-  std::list<std::string> wantedlists;
-  std::vector<std::string> deletefiles;
+  Path basepath;
+  Path target;
+  std::list<Path> wantedlists;
+  std::vector<std::pair<Path, bool>> deletefiles;
   bool listtarget;
-  std::string listtargetpath;
+  Path targetpath;
+  std::string user;
 public:
   RecursiveCommandLogic();
-  void initialize(int, std::string, std::string);
+  ~RecursiveCommandLogic();
+  void initialize(RecursiveCommandType, const Path&, const std::string&);
   bool isActive() const;
-  int getAction(std::string, std::string &);
-  void addFileList(FileList *);
+  int getAction(const Path &, Path &);
+  void addFileList(const std::shared_ptr<FileList>& fl);
   void failedCwd();
 };
-
-bool lengthSort(std::string, std::string);

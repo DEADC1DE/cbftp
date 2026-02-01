@@ -1,6 +1,7 @@
 #include "browsescreenselector.h"
 
-#include "../../core/pointer.h"
+#include <memory>
+
 #include "../../sitemanager.h"
 #include "../../site.h"
 #include "../../globalcontext.h"
@@ -10,20 +11,25 @@
 #include "../ui.h"
 #include "../menuselectoptiontextbutton.h"
 #include "../resizableelement.h"
+#include "../misc.h"
+#include "../keybinds.h"
 
 #include "browsescreenaction.h"
 
-extern GlobalContext * global;
-
-BrowseScreenSelector::BrowseScreenSelector(Ui * ui) :
+BrowseScreenSelector::BrowseScreenSelector(Ui * ui, KeyBinds& keybinds) :
+  BrowseScreenSub(keybinds),
   ui(ui),
   focus(true),
+  table(ui->getVirtualView()),
   pointer(0),
-  currentviewspan(0) {
+  currentviewspan(0),
+  gotomode(false)
+{
+  vv = &ui->getVirtualView();
   SiteManager * sm = global->getSiteManager();
-  std::vector<Site *>::const_iterator it;
+  std::vector<std::shared_ptr<Site> >::const_iterator it;
   entries.push_back(std::pair<std::string, std::string>(BROWSESCREENSELECTOR_HOME,
-                                                        global->getLocalStorage()->getDownloadPath()));
+                                                        global->getLocalStorage()->getDownloadPath().toString()));
   entries.push_back(std::pair<std::string, std::string>("", ""));
   for (it = sm->begin(); it != sm->end(); it++) {
     entries.push_back(std::pair<std::string, std::string>((*it)->getName(), (*it)->getName()));
@@ -35,7 +41,7 @@ BrowseScreenSelector::~BrowseScreenSelector() {
 }
 
 BrowseScreenType BrowseScreenSelector::type() const {
-  return BROWSESCREEN_SELECTOR;
+  return BrowseScreenType::SELECTOR;
 }
 
 void BrowseScreenSelector::redraw(unsigned int row, unsigned int col, unsigned int coloffset) {
@@ -43,24 +49,11 @@ void BrowseScreenSelector::redraw(unsigned int row, unsigned int col, unsigned i
   this->col = col;
   this->coloffset = coloffset;
   table.clear();
-  unsigned int pagerows = (unsigned int) row / 2;
-  if (pointer < currentviewspan || pointer >= currentviewspan + row) {
-    if (pointer < pagerows) {
-      currentviewspan = 0;
-    }
-    else {
-      currentviewspan = pointer - pagerows;
-    }
-  }
-  if (currentviewspan + row >= entries.size() && entries.size() + 1 >= row) {
-    currentviewspan = entries.size() + 1 - row;
-    if (currentviewspan > pointer) {
-      currentviewspan = pointer;
-    }
-  }
+  adaptViewSpan(currentviewspan, row, pointer, entries.size());
+
   int y = 0;
   for (unsigned int i = currentviewspan; i < currentviewspan + row && i < entries.size(); i++) {
-    Pointer<MenuSelectOptionTextButton> msotb =
+    std::shared_ptr<MenuSelectOptionTextButton> msotb =
         table.addTextButtonNoContent(y++, coloffset + 1, entries[i].first, entries[i].second);
     if (entries[i].first == "") {
       msotb->setSelectable(false);
@@ -71,37 +64,14 @@ void BrowseScreenSelector::redraw(unsigned int row, unsigned int col, unsigned i
   }
   table.checkPointer();
   for (unsigned int i = 0; i < table.size(); i++) {
-    Pointer<MenuSelectOptionTextButton> msotb = table.getElement(i);
+    std::shared_ptr<MenuSelectOptionTextButton> msotb = std::static_pointer_cast<MenuSelectOptionTextButton>(table.getElement(i));
     bool highlight = false;
     if (table.getSelectionPointer() == i) {
       highlight = true;
     }
-    ui->printStr(msotb->getRow(), msotb->getCol(), msotb->getLabelText(), highlight && focus);
+    vv->putStr(msotb->getRow(), msotb->getCol(), msotb->getLabelText(), highlight && focus);
   }
-  unsigned int slidersize = 0;
-  unsigned int sliderstart = 0;
-  unsigned int listsize = entries.size();
-  if (listsize > row) {
-    slidersize = (row * row) / listsize;
-    sliderstart = (row * currentviewspan) / listsize;
-    if (slidersize == 0) {
-      slidersize++;
-    }
-    if (slidersize == row) {
-      slidersize--;
-    }
-    if (sliderstart + slidersize > row || currentviewspan + row >= listsize) {
-      sliderstart = row - slidersize;
-    }
-    for (unsigned int i = 0; i < row; i++) {
-      if (i >= sliderstart && i < sliderstart + slidersize) {
-        ui->printChar(i, coloffset + col - 1, ' ', true);
-      }
-      else {
-        ui->printChar(i, coloffset + col - 1, BOX_VLINE);
-      }
-    }
-  }
+  printSlider(vv, row, coloffset + col - 1, entries.size(), currentviewspan);
 }
 
 void BrowseScreenSelector::update() {
@@ -110,28 +80,39 @@ void BrowseScreenSelector::update() {
       ui->redraw();
       return;
     }
-    Pointer<ResizableElement> re = table.getElement(table.getLastSelectionPointer());
-    ui->printStr(re->getRow(), re->getCol(), re->getLabelText());
-    re = table.getElement(table.getSelectionPointer());
-    ui->printStr(re->getRow(), re->getCol(), re->getLabelText(), focus);
+    std::shared_ptr<ResizableElement> re = std::static_pointer_cast<ResizableElement>(table.getElement(table.getLastSelectionPointer()));
+    vv->putStr(re->getRow(), re->getCol(), re->getLabelText());
+    re = std::static_pointer_cast<ResizableElement>(table.getElement(table.getSelectionPointer()));
+    vv->putStr(re->getRow(), re->getCol(), re->getLabelText(), focus);
   }
 }
 
-void BrowseScreenSelector::command(std::string, std::string) {
-
-}
-
 BrowseScreenAction BrowseScreenSelector::keyPressed(unsigned int ch) {
+  int action = keybinds.getKeyAction(ch);
   unsigned int pagerows = (unsigned int) row * 0.6;
-  switch (ch) {
-    case 27: // esc
+  if (gotomode) {
+    if (ch >= 32 && ch <= 126) {
+      for (unsigned int i = 0; i < entries.size(); i++) {
+        const std::string & label = entries[i].second;
+        if (!label.empty() && toupper(ch) == toupper(label[0])) {
+          pointer = i;
+          ui->redraw();
+          break;
+        }
+      }
+    }
+    gotomode = false;
+    ui->update();
+    ui->setLegend();
+    return BrowseScreenAction(BROWSESCREENACTION_CAUGHT);
+  }
+  switch (action) {
+    case KEYACTION_BACK_CANCEL: // esc
       ui->returnToLast();
-      break;
-    case 'c':
-    case KEY_LEFT:
-    case KEY_BACKSPACE:
+      return BrowseScreenAction(BROWSESCREENACTION_CAUGHT);
+    case KEYACTION_CLOSE:
       return BrowseScreenAction(BROWSESCREENACTION_CLOSE);
-    case KEY_UP:
+    case KEYACTION_UP:
       if (table.goUp()) {
         pointer = table.getElement(table.getSelectionPointer())->getRow() + currentviewspan;
         ui->update();
@@ -140,8 +121,8 @@ BrowseScreenAction BrowseScreenSelector::keyPressed(unsigned int ch) {
         pointer--;
         ui->redraw();
       }
-      break;
-    case KEY_DOWN:
+      return BrowseScreenAction(BROWSESCREENACTION_CAUGHT);
+    case KEYACTION_DOWN:
       if (table.goDown()) {
         pointer = table.getElement(table.getSelectionPointer())->getRow() + currentviewspan;
         ui->update();
@@ -150,16 +131,16 @@ BrowseScreenAction BrowseScreenSelector::keyPressed(unsigned int ch) {
         pointer++;
         ui->redraw();
       }
-      break;
-    case KEY_HOME:
+      return BrowseScreenAction(BROWSESCREENACTION_CAUGHT);
+    case KEYACTION_TOP:
       pointer = 0;
       ui->redraw();
-      break;
-    case KEY_END:
+      return BrowseScreenAction(BROWSESCREENACTION_CAUGHT);
+    case KEYACTION_BOTTOM:
       pointer = entries.size() - 1;
       ui->redraw();
-      break;
-    case KEY_NPAGE:
+      return BrowseScreenAction(BROWSESCREENACTION_CAUGHT);
+    case KEYACTION_NEXT_PAGE:
       if (pagerows < entries.size() && pointer < entries.size() - 1 - pagerows) {
         pointer += pagerows;
       }
@@ -167,8 +148,8 @@ BrowseScreenAction BrowseScreenSelector::keyPressed(unsigned int ch) {
         pointer = entries.size() - 1;
       }
       ui->redraw();
-      break;
-    case KEY_PPAGE:
+      return BrowseScreenAction(BROWSESCREENACTION_CAUGHT);
+    case KEYACTION_PREVIOUS_PAGE:
       if (pointer > pagerows) {
         pointer -= pagerows;
       }
@@ -176,26 +157,34 @@ BrowseScreenAction BrowseScreenSelector::keyPressed(unsigned int ch) {
         pointer = 0;
       }
       ui->redraw();
-      break;
-    case KEY_RIGHT:
-    case 10:
-    case 'b':
+      return BrowseScreenAction(BROWSESCREENACTION_CAUGHT);
+    case KEYACTION_RIGHT:
+    case KEYACTION_ENTER:
+    case KEYACTION_BROWSE:
     {
-      Pointer<MenuSelectOptionTextButton> msotb = table.getElement(table.getSelectionPointer());
+      std::shared_ptr<MenuSelectOptionTextButton> msotb = std::static_pointer_cast<MenuSelectOptionTextButton>(table.getElement(table.getSelectionPointer()));
       if (msotb->getIdentifier() == BROWSESCREENSELECTOR_HOME) {
         return BrowseScreenAction(BROWSESCREENACTION_HOME);
       }
       else {
         return BrowseScreenAction(BROWSESCREENACTION_SITE, msotb->getIdentifier());
       }
-    }
       break;
+    }
+    case KEYACTION_QUICK_JUMP:
+      gotomode = true;
+      ui->update();
+      ui->setLegend();
+      return BrowseScreenAction(BROWSESCREENACTION_CAUGHT);
   }
   return BrowseScreenAction();
 }
 
-std::string BrowseScreenSelector::getLegendText() const {
-  return "[Up/Down] Navigate - [Enter/Right/b] Browse - [Esc] Cancel - [c]lose";
+std::string BrowseScreenSelector::getLegendText(int scope) const {
+  if (gotomode) {
+    return "[Any] Go to matching first letter in site list - [Esc] Cancel";
+  }
+  return keybinds.getLegendSummary(scope);
 }
 
 std::string BrowseScreenSelector::getInfoLabel() const {
@@ -208,4 +197,12 @@ std::string BrowseScreenSelector::getInfoText() const {
 
 void BrowseScreenSelector::setFocus(bool focus) {
   this->focus = focus;
+}
+
+BrowseScreenAction BrowseScreenSelector::tryJumpSection(const std::string& section) {
+  std::shared_ptr<MenuSelectOptionTextButton> msotb = std::static_pointer_cast<MenuSelectOptionTextButton>(table.getElement(table.getSelectionPointer()));
+  if (msotb->getIdentifier() != BROWSESCREENSELECTOR_HOME) {
+    return BrowseScreenAction(BROWSESCREENACTION_SITE, msotb->getIdentifier());
+  }
+  return BrowseScreenAction(BROWSESCREENACTION_NOOP);
 }

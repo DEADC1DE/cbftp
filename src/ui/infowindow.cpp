@@ -3,49 +3,48 @@
 #include "ui.h"
 #include "termint.h"
 
-InfoWindow::InfoWindow(Ui * ui, WINDOW * window, int row, int col) {
-  this->ui = ui;
-  this->window = window;
+InfoWindow::InfoWindow(Ui* ui, unsigned int row, unsigned int col) : UIWindow(ui, "InfoWindow") {
   split = false;
-  label = "";
-  text = "";
   init(row, col);
 }
 
 void InfoWindow::redraw() {
-  ui->erase(window);
-  ui->printChar(window, 0, 1, BOX_CORNER_TR);
-  ui->printChar(window, 0, 0, BOX_HLINE);
-  ui->printChar(window, 1, 1, BOX_CORNER_BL);
-  ui->printChar(window, 0, col - 1, BOX_HLINE);
-  ui->printChar(window, 1, col - 2, BOX_CORNER_BR);
-  ui->printChar(window, 0, col - 2, BOX_CORNER_TL);
+  ui->getRenderer().erase(Window::INFO);
+  ui->getRenderer().printChar(0, 1, BOX_CORNER_TR, false, false, -1, Window::INFO);
+  ui->getRenderer().printChar(0, 0, BOX_HLINE, false, false, -1, Window::INFO);
+  ui->getRenderer().printChar(1, 1, BOX_CORNER_BL, false, false, -1, Window::INFO);
+  ui->getRenderer().printChar(0, col - 1, BOX_HLINE, false, false, -1, Window::INFO);
+  ui->getRenderer().printChar(1, col - 2, BOX_CORNER_BR, false, false, -1, Window::INFO);
+  ui->getRenderer().printChar(0, col - 2, BOX_CORNER_TL, false, false, -1, Window::INFO);
   for (unsigned int i = 2; i < col - 2; i++) {
-    ui->printChar(window, 1, i, BOX_HLINE);
+    ui->getRenderer().printChar(1, i, BOX_HLINE, false, false, -1, Window::INFO);
   }
   if (split) {
-    ui->printChar(window, 1, col / 2, BOX_HLINE_BOT);
+    ui->getRenderer().printChar(1, col / 2, BOX_HLINE_BOT, false, false, -1, Window::INFO);
   }
   update();
 }
 
 void InfoWindow::update() {
   for (unsigned int i = 2; i < col - 2; i++) {
-    ui->printChar(window, 0, i, ' ');
+    ui->getRenderer().printChar(0, i, ' ', false, false, -1, Window::INFO);
   }
   unsigned int labellen = label.length();
-  ui->printStr(window, 0, 4, label);
-  ui->printStr(window, 0, 4 + labellen + 2, text, col - 4 - 4 - labellen - 2, false, true);
+  ui->getRenderer().printStr(0, 4, label, false, false, -1, labellen, false, Window::INFO);
+  ui->getRenderer().printStr(0, 4 + labellen + 2, text, false, false, -1, col - 4 - 4 - labellen - 2, true, Window::INFO);
 }
 
-void InfoWindow::setLabel(std::string label) {
-  this->label = label;
-  update();
+void InfoWindow::setLabel(const FmtString& label) {
+  if (this->label != label) {
+    this->label = label;
+    update();
+  }
 }
-void InfoWindow::setText(std::string text) {
-  this->text = text;
-  update();
-
+void InfoWindow::setText(const FmtString& text) {
+  if (this->text != text) {
+    this->text = text;
+    update();
+  }
 }
 
 void InfoWindow::setSplit(bool split) {

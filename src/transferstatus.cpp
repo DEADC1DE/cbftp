@@ -1,17 +1,24 @@
 #include "transferstatus.h"
 
-#include "util.h"
+#include <cassert>
 
-TransferStatus::TransferStatus(int type, std::string source, std::string target,
-    std::string release, std::string file, FileList * fls, std::string sourcepath,
-    FileList * fld, std::string targetpath, unsigned long long int sourcesize,
-    unsigned int assumedspeed) :
-    type(type), source(source), target(target), release(release), file(file),
-    timestamp(util::ctimeLog()), sourcepath(sourcepath),
+#include "filelist.h"
+#include "util.h"
+#include "globalcontext.h"
+#include "timereference.h"
+
+TransferStatus::TransferStatus(int transferid, int type, const std::string& source, const std::string& target,
+    const std::string& jobname, const std::string& file, const std::shared_ptr<FileList>& fls,
+    const Path& sourcepath, const std::shared_ptr<FileList>& fld, const Path& targetpath,
+    unsigned long long int sourcesize, unsigned int assumedspeed, int srcslot,
+    int dstslot, bool ssl, bool defaultactive) :
+    type(type), transferid(transferid), source(source), target(target), jobname(jobname), file(file),
+    timestamp(global->getTimeReference()->getCurrentLogTimeStamp()), sourcepath(sourcepath),
     targetpath(targetpath), sourcesize(sourcesize), knowntargetsize(0),
     interpolatedtargetsize(0), interpolationfilltargetsize(0), speed(assumedspeed),
     state(TRANSFERSTATUS_STATE_IN_PROGRESS), timespent(0), progress(0),
-    awaited(false), callback(NULL), fls(fls), fld(fld)
+    awaited(false), callback(NULL), fls(fls), fld(fld), srcslot(srcslot), dstslot(dstslot),
+    ssl(ssl), defaultactive(defaultactive), passiveaddr("-"), cipher("-"), sslsessionreused(false)
 {
   if (!this->speed) {
     this->speed = 1024;
@@ -22,6 +29,13 @@ TransferStatus::TransferStatus(int type, std::string source, std::string target,
   this->timeremaining = this->sourcesize / (this->speed * 1024);
 }
 
+TransferStatus::~TransferStatus() {
+}
+
+int TransferStatus::getTransferId() const {
+  return transferid;
+}
+
 std::string TransferStatus::getSource() const {
   return source;
 }
@@ -30,27 +44,27 @@ std::string TransferStatus::getTarget() const {
   return target;
 }
 
-std::string TransferStatus::getRelease() const {
-  return release;
+std::string TransferStatus::getJobName() const {
+  return jobname;
 }
 
 std::string TransferStatus::getFile() const {
   return file;
 }
 
-std::string TransferStatus::getSourcePath() const {
+const Path & TransferStatus::getSourcePath() const {
   return sourcepath;
 }
 
-std::string TransferStatus::getTargetPath() const {
+const Path & TransferStatus::getTargetPath() const {
   return targetpath;
 }
 
-FileList * TransferStatus::getSourceFileList() const {
+std::shared_ptr<FileList> TransferStatus::getSourceFileList() const {
   return fls;
 }
 
-FileList * TransferStatus::getTargetFileList() const {
+std::shared_ptr<FileList> TransferStatus::getTargetFileList() const {
   return fld;
 }
 
@@ -74,7 +88,7 @@ unsigned int TransferStatus::getTimeSpent() const {
   return timespent;
 }
 
-unsigned int TransferStatus::getTimeRemaining() const {
+int TransferStatus::getTimeRemaining() const {
   return timeremaining;
 }
 
@@ -102,15 +116,76 @@ bool TransferStatus::isAwaited() const {
   return awaited;
 }
 
+int TransferStatus::getSourceSlot() const {
+  return srcslot;
+}
+
+int TransferStatus::getTargetSlot() const {
+  return dstslot;
+}
+
+bool TransferStatus::getSSL() const {
+  return ssl;
+}
+
+bool TransferStatus::getDefaultActive() const {
+  return defaultactive;
+}
+
+std::string TransferStatus::getPassiveAddress() const {
+  return passiveaddr;
+}
+
+std::string TransferStatus::getCipher() const {
+  return cipher;
+}
+
+bool TransferStatus::getSSLSessionReused() const {
+  return sslsessionreused;
+}
+
+const std::list<std::string> & TransferStatus::getLogLines() const {
+  return loglines;
+}
+
 void TransferStatus::setFinished() {
   state = TRANSFERSTATUS_STATE_SUCCESSFUL;
   progress = 100;
+  interpolatedtargetsize = knowntargetsize;
   timeremaining = 0;
 }
 
 void TransferStatus::setFailed() {
-  state = TRANSFERSTATUS_STATE_FAILED;
+  if (state != TRANSFERSTATUS_STATE_ABORTED) {
+    state = TRANSFERSTATUS_STATE_FAILED;
+    knowntargetsize = 0;
+    interpolatedtargetsize = 0;
+    progress = 0;
+    speed = 0;
+  }
   timeremaining = 0;
+}
+
+void TransferStatus::setTimeout() {
+  if (state != TRANSFERSTATUS_STATE_ABORTED) {
+    state = TRANSFERSTATUS_STATE_TIMEOUT;
+  }
+  timeremaining = 0;
+}
+
+void TransferStatus::setDupe() {
+  if (state != TRANSFERSTATUS_STATE_ABORTED) {
+    state = TRANSFERSTATUS_STATE_DUPE;
+    knowntargetsize = 0;
+    interpolatedtargetsize = 0;
+    progress = 0;
+    speed = 0;
+  }
+  timeremaining = 0;
+}
+
+void TransferStatus::setAborted() {
+  state = TRANSFERSTATUS_STATE_ABORTED;
 }
 
 void TransferStatus::setAwaited(bool awaited) {
@@ -125,6 +200,9 @@ void TransferStatus::setTargetSize(unsigned long long int targetsize) {
   // the appearing size (interpolatedtargetsize) cannot shrink. knownsize is
   // only used for determining when speed recalculation is necessary
   knowntargetsize = targetsize;
+  if (knowntargetsize > sourcesize) {
+    sourcesize = knowntargetsize;
+  }
   if (interpolatedtargetsize < knowntargetsize) {
     interpolatedtargetsize = knowntargetsize;
     updateProgress();
@@ -163,5 +241,32 @@ void TransferStatus::setSpeed(unsigned int speed) {
 
 void TransferStatus::setTimeSpent(unsigned int timespent) {
   this->timespent = timespent;
-  timeremaining = (sourcesize - interpolatedtargetsize) / (speed * 1024);
+  if (sourcesize > interpolatedtargetsize) {
+    timeremaining = (sourcesize - interpolatedtargetsize) / (speed * 1024);
+  }
+  else {
+    timeremaining = -1;
+  }
+}
+
+void TransferStatus::setPassiveAddress(const std::string & passiveaddr) {
+  this->passiveaddr = passiveaddr;
+}
+
+void TransferStatus::setCipher(const std::string & cipher) {
+  this->cipher = cipher;
+}
+
+void TransferStatus::setSSLSessionReused(bool reused) {
+  this->sslsessionreused = reused;
+}
+
+void TransferStatus::setSourceSize(unsigned long long int size) {
+  sourcesize = size;
+}
+
+void TransferStatus::addLogLine(const std::string & line) {
+  assert(state == TRANSFERSTATUS_STATE_IN_PROGRESS ||
+               state == TRANSFERSTATUS_STATE_ABORTED);
+  loglines.push_back(line);
 }

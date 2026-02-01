@@ -1,12 +1,13 @@
 #pragma once
 
 #include <list>
+#include <memory>
 #include <utility>
 
-#include "../../core/pointer.h"
 
 #include "../uiwindow.h"
 #include "../menuselectoption.h"
+#include "../../engine.h"
 
 class FocusableArea;
 class MenuSelectOptionElement;
@@ -18,32 +19,25 @@ class NewRaceScreen : public UIWindow {
 public:
   NewRaceScreen(Ui *);
   ~NewRaceScreen();
-  void initialize(unsigned int, unsigned int, std::string, std::string, std::string);
-  void update();
-  void redraw();
-  bool keyPressed(unsigned int);
-  std::string getLegendText() const;
-  std::string getInfoLabel() const;
-  std::string getInfoText() const;
+  void initialize(unsigned int row, unsigned int col, const std::string & site, const std::list<std::string> & sections, const std::list<std::pair<std::string, bool> > & items);
+  void redraw() override;
+  bool keyPressed(unsigned int) override;
+  std::string getInfoLabel() const override;
+  std::string getInfoText() const override;
 private:
   void populateSiteList();
-  Pointer<Race> startRace();
-  Site * startsite;
-  std::string getSectionButtonText(Pointer<MenuSelectOptionElement>) const;
-  std::string currentlegendtext;
-  std::string defaultlegendtext;
-  bool active;
+  JobStartResult startRace(bool addtemplegend);
+  std::shared_ptr<Site> startsite;
+  std::string getSectionButtonText(std::shared_ptr<MenuSelectOptionElement>) const;
   bool toggleall;
-  bool sectionupdate;
   std::string section;
-  Pointer<MenuSelectOptionElement> activeelement;
   FocusableArea * focusedarea;
   FocusableArea * defocusedarea;
   MenuSelectOption msos;
   MenuSelectOption mso;
   std::list<std::string> sections;
-  std::string release;
+  std::list<std::pair<std::string, bool> > items;
   std::string infotext;
   std::list<std::pair<std::string, bool> > tempsites;
-  Pointer<MenuSelectOptionTextArrow> msota;
+  std::shared_ptr<MenuSelectOptionTextArrow> msota;
 };

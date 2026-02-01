@@ -1,30 +1,45 @@
 #include "menuselectoptiontextarrow.h"
 
-#include <ncursesw/curses.h>
+#include "ncurseswrap.h"
 
 MenuSelectOptionTextArrow::MenuSelectOptionTextArrow(std::string identifier, int row, int col, std::string label) {
   arrow = TextArrow();
   init(identifier, row, col, label);
 }
 
-std::string MenuSelectOptionTextArrow::getContentText() const {
+FmtString MenuSelectOptionTextArrow::getContentText() const {
   return arrow.getVisual();
 }
 
-void MenuSelectOptionTextArrow::inputChar(int ch) {
+bool MenuSelectOptionTextArrow::inputChar(int ch) {
   switch(ch) {
     case KEY_DOWN:
     case KEY_LEFT:
       arrow.previous();
-      break;
+      return true;
     case KEY_UP:
     case KEY_RIGHT:
       arrow.next();
+      return true;
+    case 10:
+      if (arrow.isActive()) {
+        deactivate();
+        return true;
+      }
+      break;
+    case 27:
+      if (arrow.isActive()) {
+        arrow.setOption(lastoption);
+        deactivate();
+        return true;
+      }
       break;
   }
+  return false;
 }
 
 bool MenuSelectOptionTextArrow::activate() {
+  lastoption = arrow.getOption();
   arrow.activate();
   return true;
 }

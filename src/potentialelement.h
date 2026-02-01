@@ -1,20 +1,22 @@
 #pragma once
 
+#include <memory>
 #include <string>
 
 class SiteLogic;
 
 class PotentialElement {
   private:
-    SiteLogic * site;
+    std::shared_ptr<SiteLogic> site;
     int potential;
-    int site_dnslots;
+    int dstupslots;
     std::string filename;
   public:
     PotentialElement();
-    SiteLogic * getSite() const;
-    int getSiteDownloadSlots() const;
+    const std::shared_ptr<SiteLogic> & getSite() const;
+    int getDestinationSiteUploadSlots() const;
     int getPotential() const;
     std::string getFileName() const;
-    void update(SiteLogic *, int, int, std::string);
+    void reset();
+    void update(const std::shared_ptr<SiteLogic> &, int, int, const std::string &);
 };

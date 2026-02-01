@@ -1,16 +1,29 @@
 #include "menuselectoption.h"
 
+#include <cassert>
+#include <cstdlib>
+
 #include "menuselectoptionelement.h"
 #include "menuselectoptiontextfield.h"
 #include "menuselectoptionnumarrow.h"
 #include "menuselectoptioncheckbox.h"
+#include "menuselectoptionalttextbutton.h"
 #include "menuselectoptiontextbutton.h"
 #include "menuselectoptiontextarrow.h"
 #include "menuselectadjustableline.h"
+#include "virtualview.h"
 
 #define MAX_DIFF_LR 30
+#define MAX_DIFF_UD 2
 
-MenuSelectOption::MenuSelectOption() {
+enum Direction {
+  UP,
+  DOWN,
+  LEFT,
+  RIGHT
+};
+
+MenuSelectOption::MenuSelectOption(VirtualView& vv, bool affectvvvertical) : vv(vv), affectvvvertical(affectvvvertical) {
   pointer = 0;
   lastpointer = 0;
 }
@@ -19,140 +32,66 @@ MenuSelectOption::~MenuSelectOption() {
 
 }
 
-bool MenuSelectOption::goDown() {
+bool MenuSelectOption::navigate(int dir) {
   if (!options.size()) return false;
-  unsigned int ccol = options[pointer]->getCol();
-  unsigned int crow = options[pointer]->getRow();
+  int ccol = options[pointer]->getCol();
+  int crow = options[pointer]->getRow();
   unsigned int closestelem;
   bool movefound = false;
-  unsigned int closest = -1;
+  int closest = -1;
   for (unsigned int i = 0; i < options.size(); i++) {
     if (!options[i]->visible() || !options[i]->isSelectable()) {
       continue;
     }
-    unsigned int row = options[i]->getRow();
-    unsigned int col = options[i]->getCol();
-    if (row > crow && col <= ccol + MAX_DIFF_LR &&
-        (ccol < MAX_DIFF_LR || col >= ccol - MAX_DIFF_LR)) {
-      if (row < closest || closest == (unsigned int)-1) {
-        closest = row;
+    int row = options[i]->getRow();
+    int col = options[i]->getCol();
+    int distance = abs(row - crow) * 30 + abs(col - ccol);
+    if ((((dir == DOWN && row > crow) || (dir == UP && row < crow)) &&
+         abs(col - ccol) <= MAX_DIFF_LR) ||
+        (((dir == LEFT && col < ccol) || (dir == RIGHT && col > ccol)) &&
+         abs(row - crow) <= MAX_DIFF_UD))
+    {
+      if (distance < closest || closest == -1) {
+        closest = distance;
         closestelem = i;
         movefound = true;
       }
     }
   }
   if (movefound) {
+    const std::shared_ptr<MenuSelectOptionElement>& msoe = options[closestelem];
+    if (affectvvvertical || static_cast<unsigned int>(crow) == msoe->getRow()) {
+      vv.viewPosition(msoe->getRow(), msoe->getCol(), msoe->getTotalWidth());
+    }
     lastpointer = pointer;
     pointer = closestelem;
     return true;
   }
-  if (leavedown) {
+  if ((dir == DOWN && leavedown) || (dir == UP && leaveup) ||
+      (dir == LEFT && leaveleft) || (dir == RIGHT && leaveright))
+    {
     lastpointer = pointer;
     focus = false;
     return true;
   }
   return false;
+}
+
+bool MenuSelectOption::goDown() {
+  return navigate(DOWN);
+
 }
 
 bool MenuSelectOption::goUp() {
-  if (!options.size()) return false;
-  unsigned int ccol = options[pointer]->getCol();
-  unsigned int crow = options[pointer]->getRow();
-  unsigned int closestelem;
-  bool movefound = false;
-  unsigned int closest = -1;
-  for (unsigned int i = 0; i < options.size(); i++) {
-    if (!options[i]->visible() || !options[i]->isSelectable()) {
-      continue;
-    }
-    unsigned int row = options[i]->getRow();
-    unsigned int col = options[i]->getCol();
-    if (row < crow && col <= ccol + MAX_DIFF_LR &&
-        (ccol < MAX_DIFF_LR || col >= ccol - MAX_DIFF_LR)) {
-      if (row > closest || closest == (unsigned int)-1) {
-        closest = row;
-        closestelem = i;
-        movefound = true;
-      }
-    }
-  }
-  if (movefound) {
-    lastpointer = pointer;
-    pointer = closestelem;
-    return true;
-  }
-  if (leaveup) {
-    lastpointer = pointer;
-    focus = false;
-    return true;
-  }
-  return false;
+  return navigate(UP);
 }
 
 bool MenuSelectOption::goRight() {
-  if (!options.size()) return false;
-  unsigned int ccol = options[pointer]->getCol();
-  unsigned int crow = options[pointer]->getRow();
-  unsigned int closestelem;
-  bool movefound = false;
-  unsigned int closest = -1;
-  for (unsigned int i = 0; i < options.size(); i++) {
-    if (!options[i]->visible() || !options[i]->isSelectable()) {
-      continue;
-    }
-    unsigned int col = options[i]->getCol();
-    if (col > ccol && options[i]->getRow() == crow) {
-      if (col < closest || closest == (unsigned int)-1) {
-        closest = col;
-        closestelem = i;
-        movefound = true;
-      }
-    }
-  }
-  if (movefound) {
-    lastpointer = pointer;
-    pointer = closestelem;
-    return true;
-  }
-  if (leaveright) {
-    lastpointer = pointer;
-    focus = false;
-    return true;
-  }
-  return false;
+  return navigate(RIGHT);
 }
 
 bool MenuSelectOption::goLeft() {
-  if (!options.size()) return false;
-  unsigned int ccol = options[pointer]->getCol();
-  unsigned int crow = options[pointer]->getRow();
-  unsigned int closestelem;
-  bool movefound = false;
-  unsigned int closest = -1;
-  for (unsigned int i = 0; i < options.size(); i++) {
-    if (!options[i]->visible() || !options[i]->isSelectable()) {
-      continue;
-    }
-    unsigned int col = options[i]->getCol();
-    if (col < ccol && options[i]->getRow() == crow) {
-      if (col > closest || closest == (unsigned int)-1) {
-        closest = col;
-        closestelem = i;
-        movefound = true;
-      }
-    }
-  }
-  if (movefound) {
-    lastpointer = pointer;
-    pointer = closestelem;
-    return true;
-  }
-  if (leaveleft) {
-    lastpointer = pointer;
-    focus = false;
-    return true;
-  }
-  return false;
+  return navigate(LEFT);
 }
 
 bool MenuSelectOption::goNext() {
@@ -181,59 +120,65 @@ bool MenuSelectOption::goPrevious() {
   return false;
 }
 
-Pointer<MenuSelectOptionTextField> MenuSelectOption::addStringField(int row, int col, std::string identifier, std::string label, std::string starttext, bool secret) {
+std::shared_ptr<MenuSelectOptionTextField> MenuSelectOption::addStringField(int row, int col, std::string identifier, std::string label, std::string starttext, bool secret) {
   return addStringField(row, col, identifier, label, starttext, secret, 32, 32);
 }
 
-Pointer<MenuSelectOptionTextField> MenuSelectOption::addStringField(int row, int col, std::string identifier, std::string label, std::string starttext, bool secret, int maxlen) {
+std::shared_ptr<MenuSelectOptionTextField> MenuSelectOption::addStringField(int row, int col, std::string identifier, std::string label, std::string starttext, bool secret, int maxlen) {
   return addStringField(row, col, identifier, label, starttext, secret, maxlen, maxlen);
 }
 
-Pointer<MenuSelectOptionTextField> MenuSelectOption::addStringField(int row, int col, std::string identifier, std::string label, std::string starttext, bool secret, int visiblelen, int maxlen) {
-  Pointer<MenuSelectOptionTextField> msotf(makePointer<MenuSelectOptionTextField>(identifier, row, col, label, starttext, visiblelen, maxlen, secret));
+std::shared_ptr<MenuSelectOptionTextField> MenuSelectOption::addStringField(int row, int col, std::string identifier, std::string label, std::string starttext, bool secret, int visiblelen, int maxlen) {
+  std::shared_ptr<MenuSelectOptionTextField> msotf(std::make_shared<MenuSelectOptionTextField>(identifier, row, col, label, starttext, visiblelen, maxlen, secret));
   options.push_back(msotf);
   return msotf;
 }
 
-Pointer<MenuSelectOptionTextArrow> MenuSelectOption::addTextArrow(int row, int col, std::string identifier, std::string label) {
-  Pointer<MenuSelectOptionTextArrow> msota(makePointer<MenuSelectOptionTextArrow>(identifier, row, col, label));
+std::shared_ptr<MenuSelectOptionTextArrow> MenuSelectOption::addTextArrow(int row, int col, std::string identifier, std::string label) {
+  std::shared_ptr<MenuSelectOptionTextArrow> msota(std::make_shared<MenuSelectOptionTextArrow>(identifier, row, col, label));
   options.push_back(msota);
   return msota;
 }
 
-Pointer<MenuSelectOptionNumArrow> MenuSelectOption::addIntArrow(int row, int col, std::string identifier, std::string label, int startval, int min, int max) {
-  Pointer<MenuSelectOptionNumArrow> msona(makePointer<MenuSelectOptionNumArrow>(identifier, row, col, label, startval, min, max));
+std::shared_ptr<MenuSelectOptionNumArrow> MenuSelectOption::addIntArrow(int row, int col, std::string identifier, std::string label, int startval, int min, int max) {
+  std::shared_ptr<MenuSelectOptionNumArrow> msona(std::make_shared<MenuSelectOptionNumArrow>(identifier, row, col, label, startval, min, max));
   options.push_back(msona);
   return msona;
 }
 
-Pointer<MenuSelectOptionCheckBox> MenuSelectOption::addCheckBox(int row, int col, std::string identifier, std::string label, bool startval) {
-  Pointer<MenuSelectOptionCheckBox> msocb(makePointer<MenuSelectOptionCheckBox>(identifier, row, col, label, startval));
+std::shared_ptr<MenuSelectOptionCheckBox> MenuSelectOption::addCheckBox(int row, int col, std::string identifier, std::string label, bool startval) {
+  std::shared_ptr<MenuSelectOptionCheckBox> msocb(std::make_shared<MenuSelectOptionCheckBox>(identifier, row, col, label, startval));
   options.push_back(msocb);
   return msocb;
 }
 
-Pointer<MenuSelectOptionTextButton> MenuSelectOption::addTextButton(int row, int col, std::string identifier, std::string label) {
-  Pointer<MenuSelectOptionTextButton> msotb(makePointer<MenuSelectOptionTextButton>(identifier, row, col, label, true));
+std::shared_ptr<MenuSelectOptionTextButton> MenuSelectOption::addTextButton(int row, int col, std::string identifier, std::string label) {
+  std::shared_ptr<MenuSelectOptionTextButton> msotb(std::make_shared<MenuSelectOptionTextButton>(identifier, row, col, label, true));
   options.push_back(msotb);
   return msotb;
 }
 
-Pointer<MenuSelectOptionTextButton> MenuSelectOption::addTextButtonNoContent(int row, int col, std::string identifier, std::string label) {
-  Pointer<MenuSelectOptionTextButton> msotb(makePointer<MenuSelectOptionTextButton>(identifier, row, col, label, false));
+std::shared_ptr<MenuSelectOptionTextButton> MenuSelectOption::addTextButtonNoContent(int row, int col, std::string identifier, std::string label) {
+  std::shared_ptr<MenuSelectOptionTextButton> msotb(std::make_shared<MenuSelectOptionTextButton>(identifier, row, col, label, false));
   options.push_back(msotb);
   return msotb;
 }
 
-Pointer<MenuSelectAdjustableLine> MenuSelectOption::addAdjustableLine() {
-  Pointer<MenuSelectAdjustableLine> msal(makePointer<MenuSelectAdjustableLine>());
+std::shared_ptr<MenuSelectOptionAltTextButton> MenuSelectOption::addAltTextButton(int row, int col, const std::string& identifier, const std::string& longtext, const std::string& shorttext) {
+  std::shared_ptr<MenuSelectOptionAltTextButton> msoatb(std::make_shared<MenuSelectOptionAltTextButton>(identifier, row, col, longtext, shorttext));
+  options.push_back(msoatb);
+  return msoatb;
+}
+
+std::shared_ptr<MenuSelectAdjustableLine> MenuSelectOption::addAdjustableLine() {
+  std::shared_ptr<MenuSelectAdjustableLine> msal(std::make_shared<MenuSelectAdjustableLine>());
   adjustablelines.push_back(msal);
   return msal;
 }
 
-Pointer<MenuSelectAdjustableLine> MenuSelectOption::addAdjustableLineBefore(Pointer<MenuSelectAdjustableLine> before) {
-  Pointer<MenuSelectAdjustableLine> msal(makePointer<MenuSelectAdjustableLine>());
-  std::vector<Pointer<MenuSelectAdjustableLine> >::iterator it;
+std::shared_ptr<MenuSelectAdjustableLine> MenuSelectOption::addAdjustableLineBefore(std::shared_ptr<MenuSelectAdjustableLine> before) {
+  std::shared_ptr<MenuSelectAdjustableLine> msal(std::make_shared<MenuSelectAdjustableLine>());
+  std::vector<std::shared_ptr<MenuSelectAdjustableLine> >::iterator it;
   for (it = adjustablelines.begin(); it != adjustablelines.end(); it++) {
     if (*it == before) {
       adjustablelines.insert(it, msal);
@@ -244,21 +189,21 @@ Pointer<MenuSelectAdjustableLine> MenuSelectOption::addAdjustableLineBefore(Poin
   return msal;
 }
 
-Pointer<MenuSelectOptionElement> MenuSelectOption::getElement(unsigned int i) const {
+std::shared_ptr<MenuSelectOptionElement> MenuSelectOption::getElement(unsigned int i) const {
   if (i >= size()) {
-    return Pointer<MenuSelectOptionElement>();
+    return std::shared_ptr<MenuSelectOptionElement>();
   }
   return options[i];
 }
 
-Pointer<MenuSelectOptionElement> MenuSelectOption::getElement(std::string identifier) const {
-  std::vector<Pointer<MenuSelectOptionElement> >::const_iterator it;
+std::shared_ptr<MenuSelectOptionElement> MenuSelectOption::getElement(std::string identifier) const {
+  std::vector<std::shared_ptr<MenuSelectOptionElement> >::const_iterator it;
   for (it = options.begin(); it != options.end(); it++) {
     if ((*it)->getIdentifier() == identifier) {
       return *it;
     }
   }
-  return Pointer<MenuSelectOptionElement>();
+  return std::shared_ptr<MenuSelectOptionElement>();
 }
 
 unsigned int MenuSelectOption::getLastSelectionPointer() const {
@@ -294,6 +239,10 @@ void MenuSelectOption::enterFocusFrom(int dir) {
     pointer = lastpointer = size() - 1;
   }
   checkPointer();
+  if (size()) {
+    const std::shared_ptr<MenuSelectOptionElement>& msoe = options[pointer];
+    vv.viewPosition(msoe->getRow(), msoe->getCol(), msoe->getTotalWidth());
+  }
 }
 
 unsigned int MenuSelectOption::size() const {
@@ -312,18 +261,27 @@ void MenuSelectOption::adjustLines(unsigned int linesize) {
   if (!elementcount) {
     return;
   }
-  std::vector<int> maxwantedwidths;
-  std::vector<int> maxwidths;
+  std::vector<unsigned int> maxwantedwidths;
+  std::vector<unsigned int> maxalternatewantedwidths;
+  std::vector<unsigned int> maxwidths;
+  std::vector<unsigned int> averagewantedwidths;
   maxwantedwidths.resize(elementcount); // int is initialized to 0
+  maxalternatewantedwidths.resize(elementcount);
   maxwidths.resize(elementcount);
+  averagewantedwidths.resize(elementcount);
   int shortspaces = 0;
-  for (std::vector<Pointer<MenuSelectAdjustableLine> >::iterator it = adjustablelines.begin(); it != adjustablelines.end(); it++) {
+  for (std::vector<std::shared_ptr<MenuSelectAdjustableLine> >::iterator it = adjustablelines.begin(); it != adjustablelines.end(); it++) {
     for (unsigned int i = 0; i < elementcount; i++) {
-      Pointer<ResizableElement> re = (*it)->getElement(i);
-      int wantedwidth = re->wantedWidth();
+      std::shared_ptr<ResizableElement> re = (*it)->getElement(i);
+      unsigned int wantedwidth = re->wantedWidth();
+      unsigned int alternatewantedwidth = re->alternateWantedWidth();
       if (wantedwidth > maxwantedwidths[i]) {
         maxwantedwidths[i] = wantedwidth;
       }
+      if (alternatewantedwidth > maxalternatewantedwidths[i]) {
+        maxalternatewantedwidths[i] = alternatewantedwidth;
+      }
+      averagewantedwidths[i] += wantedwidth;
       if (it == adjustablelines.begin() && re->shortSpacing() && i + 1 != elementcount) {
         shortspaces++;
       }
@@ -334,34 +292,58 @@ void MenuSelectOption::adjustLines(unsigned int linesize) {
   for (unsigned int i = 0; i < maxwantedwidths.size(); i++) {
     totalwantedwidth += maxwantedwidths[i];
     maxwidths[i] = maxwantedwidths[i];
+    averagewantedwidths[i] = (averagewantedwidths[i] * 0.9) / adjustablelines.size();
   }
   while (totalwantedwidth != linesize) {
     if (totalwantedwidth < linesize) {
+      bool expanded = false;
       for (unsigned int i = 0; i < elementcount; i++) {
-        Pointer<ResizableElement> elem = adjustablelines[0]->getElement(i);
+        std::shared_ptr<ResizableElement> elem = adjustablelines[0]->getElement(i);
         if (elem->isExpandable()) {
           unsigned int expansion = linesize - totalwantedwidth;
           maxwidths[i] += expansion;
           totalwantedwidth += expansion;
+          expanded = true;
           break;
         }
       }
-      break;
+      if (!expanded) {
+        break;
+      }
     }
     else if (totalwantedwidth > linesize) {
       int leastimportant = -1;
       int leastimportantprio = 0;
+      bool leastimportantpartialremove = false;
+      bool leastimportanthighprio = false;
       for (unsigned int i = 0; i < elementcount; i++) {
         if (!adjustablelines[0]->getElement(i)->isVisible()) {
           continue;
         }
-        int prio = adjustablelines[0]->getElement(i)->priority();
+        std::shared_ptr<ResizableElement> re = adjustablelines[0]->getElement(i);
+        int prio = re->lowPriority();
+        int highprio = re->highPriority();
+        bool partialremove = false;
+        bool athighprio = false;
+        if (prio != highprio) {
+          partialremove = true;
+          size_t resizemethod = re->resizeMethod();
+          if ((resizemethod != RESIZE_ALTERNATE && maxwidths[i] <= averagewantedwidths[i]) ||
+              (resizemethod == RESIZE_ALTERNATE && maxwidths[i] <= maxalternatewantedwidths[i]))
+          {
+            athighprio = true;
+            prio = highprio;
+            partialremove = false;
+          }
+        }
         if (prio < leastimportantprio || leastimportant < 0) {
           leastimportantprio = prio;
           leastimportant = i;
+          leastimportantpartialremove = partialremove;
+          leastimportanthighprio = athighprio;
         }
       }
-      Pointer<ResizableElement> leastimportantelem = adjustablelines[0]->getElement(leastimportant);
+      std::shared_ptr<ResizableElement> leastimportantelem = adjustablelines[0]->getElement(leastimportant);
       int spacing = leastimportantelem->shortSpacing() ? RESIZE_SPACING_SHORT : RESIZE_SPACING;
       unsigned int maxsaving = maxwantedwidths[leastimportant] + spacing;
       unsigned int resizemethod = leastimportantelem->resizeMethod();
@@ -372,10 +354,13 @@ void MenuSelectOption::adjustLines(unsigned int linesize) {
           break;
         case RESIZE_WITHDOTS:
         case RESIZE_CUTEND:
-        case RESIZE_WITHLAST3:
-          if (totalwantedwidth - maxwantedwidths[leastimportant] < linesize) {
-            int reduction = totalwantedwidth - linesize;
-            maxwidths[leastimportant] = maxwantedwidths[leastimportant] - reduction;
+        case RESIZE_WITHLAST3: {
+          int maxwantedwidth = (leastimportanthighprio ? averagewantedwidths : maxwantedwidths)[leastimportant];
+          if (leastimportantpartialremove || totalwantedwidth - maxwantedwidth < linesize) {
+            int reduction = leastimportantpartialremove ?
+                maxwantedwidth - averagewantedwidths[leastimportant] :
+                totalwantedwidth - linesize;
+            maxwidths[leastimportant] = maxwantedwidth - reduction;
             totalwantedwidth -= reduction;
           }
           else {
@@ -383,14 +368,27 @@ void MenuSelectOption::adjustLines(unsigned int linesize) {
             totalwantedwidth -= maxsaving;
           }
           break;
+        }
+        case RESIZE_ALTERNATE: {
+          if (leastimportantpartialremove && !leastimportanthighprio) {
+            int reduction = maxwantedwidths[leastimportant] - maxalternatewantedwidths[leastimportant];
+            maxwidths[leastimportant] -= reduction;
+            totalwantedwidth -= reduction;
+          }
+          else {
+            leastimportantelem->setVisible(false);
+            totalwantedwidth -= maxalternatewantedwidths[leastimportant] + spacing;
+          }
+          break;
+        }
       }
     }
   }
   int startpos = adjustablelines[0]->getElement(0)->getCol();
-  for (std::vector<Pointer<MenuSelectAdjustableLine> >::iterator it = adjustablelines.begin(); it != adjustablelines.end(); it++) {
+  for (std::vector<std::shared_ptr<MenuSelectAdjustableLine> >::iterator it = adjustablelines.begin(); it != adjustablelines.end(); it++) {
     int elementpos = startpos;
     for (unsigned int i = 0; i < elementcount; i++) {
-      Pointer<ResizableElement> elem = (*it)->getElement(i);
+      std::shared_ptr<ResizableElement> elem = (*it)->getElement(i);
       if (adjustablelines[0]->getElement(i)->isVisible()) {
         elem->setMaxWidth(maxwidths[i]);
         elem->setPosition(elem->getRow(), elementpos);
@@ -418,16 +416,16 @@ void MenuSelectOption::checkPointer() {
   lastpointer = pointer;
 }
 
-std::vector<Pointer<MenuSelectAdjustableLine> >::iterator MenuSelectOption::linesBegin() {
+std::vector<std::shared_ptr<MenuSelectAdjustableLine> >::iterator MenuSelectOption::linesBegin() {
   return adjustablelines.begin();
 }
 
-std::vector<Pointer<MenuSelectAdjustableLine> >::iterator MenuSelectOption::linesEnd() {
+std::vector<std::shared_ptr<MenuSelectAdjustableLine> >::iterator MenuSelectOption::linesEnd() {
   return adjustablelines.end();
 }
 
-Pointer<MenuSelectAdjustableLine> MenuSelectOption::getAdjustableLine(Pointer<MenuSelectOptionElement> msoe) const {
-  std::vector<Pointer<MenuSelectAdjustableLine> >::const_iterator it;
+std::shared_ptr<MenuSelectAdjustableLine> MenuSelectOption::getAdjustableLine(std::shared_ptr<MenuSelectOptionElement> msoe) const {
+  std::vector<std::shared_ptr<MenuSelectAdjustableLine> >::const_iterator it;
   for (it = adjustablelines.begin(); it != adjustablelines.end(); it++) {
     for (unsigned int i = 0; i < (*it)->size(); i++) {
       if ((*it)->getElement(i) == msoe) {
@@ -435,11 +433,26 @@ Pointer<MenuSelectAdjustableLine> MenuSelectOption::getAdjustableLine(Pointer<Me
       }
     }
   }
-  return Pointer<MenuSelectAdjustableLine>();
+  return std::shared_ptr<MenuSelectAdjustableLine>();
 }
 
-void MenuSelectOption::removeAdjustableLine(Pointer<MenuSelectAdjustableLine> msal) {
-  std::vector<Pointer<MenuSelectAdjustableLine> >::iterator it;
+std::shared_ptr<MenuSelectAdjustableLine> MenuSelectOption::getAdjustableLine(unsigned int lineindex) const {
+  assert(lineindex < adjustablelines.size());
+  return adjustablelines[lineindex];
+}
+
+std::shared_ptr<MenuSelectAdjustableLine> MenuSelectOption::getAdjustableLineOnRow(unsigned int row) const {
+  std::vector<std::shared_ptr<MenuSelectAdjustableLine> >::const_iterator it;
+  for (it = adjustablelines.begin(); it != adjustablelines.end(); it++) {
+    if (!(*it)->empty() && (*it)->getElement(0)->getRow() == row) {
+      return *it;
+    }
+  }
+  return std::shared_ptr<MenuSelectAdjustableLine>();
+}
+
+void MenuSelectOption::removeAdjustableLine(std::shared_ptr<MenuSelectAdjustableLine> msal) {
+  std::vector<std::shared_ptr<MenuSelectAdjustableLine> >::iterator it;
   for (it = adjustablelines.begin(); it != adjustablelines.end(); it++) {
     if (*it == msal) {
       for (unsigned int i = 0; i < (*it)->size(); i++) {
@@ -451,8 +464,8 @@ void MenuSelectOption::removeAdjustableLine(Pointer<MenuSelectAdjustableLine> ms
   }
 }
 
-void MenuSelectOption::removeElement(Pointer<MenuSelectOptionElement> msoe) {
-  std::vector<Pointer<MenuSelectOptionElement> >::iterator it;
+void MenuSelectOption::removeElement(std::shared_ptr<MenuSelectOptionElement> msoe) {
+  std::vector<std::shared_ptr<MenuSelectOptionElement> >::iterator it;
   for (it = options.begin(); it != options.end(); it++) {
     if (*it == msoe) {
       options.erase(it);
@@ -461,9 +474,9 @@ void MenuSelectOption::removeElement(Pointer<MenuSelectOptionElement> msoe) {
   }
 }
 
-void MenuSelectOption::setPointer(Pointer<MenuSelectOptionElement> set) {
+void MenuSelectOption::setPointer(std::shared_ptr<MenuSelectOptionElement> set) {
   for (unsigned int i = 0; i < options.size(); i++) {
-    Pointer<MenuSelectOptionElement> msoe = options[i];
+    std::shared_ptr<MenuSelectOptionElement> msoe = options[i];
     if (msoe == set) {
       pointer = i;
       return;
@@ -471,12 +484,12 @@ void MenuSelectOption::setPointer(Pointer<MenuSelectOptionElement> set) {
   }
 }
 
-bool MenuSelectOption::swapLineWithNext(Pointer<MenuSelectAdjustableLine> msal) {
-  std::vector<Pointer<MenuSelectAdjustableLine> >::iterator it;
+bool MenuSelectOption::swapLineWithNext(std::shared_ptr<MenuSelectAdjustableLine> msal) {
+  std::vector<std::shared_ptr<MenuSelectAdjustableLine> >::iterator it;
   for (it = adjustablelines.begin(); it != adjustablelines.end(); it++) {
     if (*it == msal) {
       if (it + 1 != adjustablelines.end()) {
-        Pointer<MenuSelectAdjustableLine> swap = *(it + 1);
+        std::shared_ptr<MenuSelectAdjustableLine> swap = *(it + 1);
         *(it + 1) = msal;
         *it = swap;
         return true;
@@ -487,12 +500,12 @@ bool MenuSelectOption::swapLineWithNext(Pointer<MenuSelectAdjustableLine> msal) 
   return false;
 }
 
-bool MenuSelectOption::swapLineWithPrevious(Pointer<MenuSelectAdjustableLine> msal) {
-  std::vector<Pointer<MenuSelectAdjustableLine> >::iterator it;
+bool MenuSelectOption::swapLineWithPrevious(std::shared_ptr<MenuSelectAdjustableLine> msal) {
+  std::vector<std::shared_ptr<MenuSelectAdjustableLine> >::iterator it;
   for (it = adjustablelines.begin(); it != adjustablelines.end(); it++) {
     if (*it == msal) {
       if (it != adjustablelines.begin()) {
-        Pointer<MenuSelectAdjustableLine> swap = *(it - 1);
+        std::shared_ptr<MenuSelectAdjustableLine> swap = *(it - 1);
         *(it - 1) = msal;
         *it = swap;
         return true;
@@ -503,8 +516,8 @@ bool MenuSelectOption::swapLineWithPrevious(Pointer<MenuSelectAdjustableLine> ms
   return false;
 }
 
-int MenuSelectOption::getLineIndex(Pointer<MenuSelectAdjustableLine> msal) {
-  std::vector<Pointer<MenuSelectAdjustableLine> >::iterator it;
+int MenuSelectOption::getLineIndex(std::shared_ptr<MenuSelectAdjustableLine> msal) {
+  std::vector<std::shared_ptr<MenuSelectAdjustableLine> >::iterator it;
   int index = 0;
   for (it = adjustablelines.begin(); it != adjustablelines.end(); it++) {
     if (*it == msal) {

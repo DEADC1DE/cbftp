@@ -1,12 +1,15 @@
 #pragma once
 
+#include <memory>
+#include <string>
+#include <vector>
+
 #include "../uiwindow.h"
 
-#include "../../core/pointer.h"
-#include "../../encoding.h"
+#include "../../core/types.h"
 
-#include <vector>
-#include <string>
+#include "../../encoding.h"
+#include "../../path.h"
 
 class TransferStatus;
 class SiteLogic;
@@ -19,19 +22,21 @@ class ViewFileScreen : public UIWindow {
 public:
   ViewFileScreen(Ui * ui);
   ~ViewFileScreen();
-  void initialize(unsigned int, unsigned int, const std::string &, const std::string &, FileList *);
-  void initialize(unsigned int, unsigned int, const std::string &, const std::string &);
-  void redraw();
-  void update();
-  bool keyPressed(unsigned int);
-  std::string getLegendText() const;
-  std::string getInfoLabel() const;
-  std::string getInfoText() const;
+  void initialize(unsigned int, unsigned int, const std::string &, const std::string &, const std::shared_ptr<FileList>& fl);
+  void initialize(unsigned int, unsigned int, const Path &, const std::string &);
+  void redraw() override;
+  void update() override;
+  bool keyPressed(unsigned int) override;
+  std::string getLegendText() const override;
+  std::string getInfoLabel() const override;
+  std::string getInfoText() const override;
 private:
+  int getCurrentScope() const;
   int state;
-  SiteLogic * sitelogic;
-  Pointer<TransferStatus> ts;
-  FileList * filelist;
+  int requestid;
+  std::shared_ptr<SiteLogic> sitelogic;
+  std::shared_ptr<TransferStatus> ts;
+  std::shared_ptr<FileList> filelist;
   std::string site;
   std::string file;
   unsigned int x;
@@ -43,10 +48,11 @@ private:
   bool legendupdated;
   bool deleteafter;
   std::vector<std::string > rawcontents;
-  std::vector<std::basic_string<unsigned int> > translatedcontents;
-  std::string path;
+  std::vector<std::basic_string<char32_t> > translatedcontents;
+  Path path;
   int pid;
   encoding::Encoding encoding;
+  Core::BinaryData tmpdata;
   bool goDown();
   bool goUp();
   void printTransferInfo();

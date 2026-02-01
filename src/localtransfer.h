@@ -3,27 +3,27 @@
 #include <string>
 #include <fstream>
 
-#include "core/eventreceiver.h"
+#include "eventreceiverproxyintermediate.h"
+#include "path.h"
 
 #define CHUNK 524288
 
 class TransferMonitor;
 class FTPConn;
 
-class LocalTransfer : public EventReceiver {
+class LocalTransfer : public EventReceiverProxyIntermediate {
 public:
   LocalTransfer();
   bool active() const;
-  void FDNew(int);
-  void tick(int);
-  void openFile(bool);
+  bool openFile(bool);
   int getPort() const;
+  virtual void disconnect() = 0;
   virtual unsigned long long int size() const = 0;
   FTPConn * getConn() const;
 protected:
+  void activate(int localtransferid);
+  void deactivate();
   bool ssl;
-  int sockid;
-  bool inuse;
   bool inmemory;
   bool passivemode;
   int port;
@@ -31,9 +31,16 @@ protected:
   bool fileopened;
   FTPConn * ftpconn;
   std::fstream filestream;
-  std::string path;
+  Path path;
   std::string filename;
   char * buf;
   unsigned int buflen;
   unsigned int bufpos;
+  bool timeoutticker;
+private:
+  void FDInterNew(int sockid, int newsockid) override;
+  void FDInterInfo(int sockid, const std::string& info) override;
+  void tick(int) override;
+  bool inuse;
+  int localtransferid;
 };

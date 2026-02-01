@@ -1,11 +1,18 @@
 #pragma once
 
-#include <string>
 #include <list>
 #include <map>
+#include <memory>
+#include <string>
 
-#include "core/pointer.h"
+#include "core/eventreceiver.h"
 #include "core/types.h"
+#include "path.h"
+#include "localpathinfo.h"
+#include "localfile.h"
+#include "localstoragerequestdata.h"
+#include "transferprotocol.h"
+#include "util.h"
 
 class LocalTransfer;
 class LocalDownload;
@@ -16,59 +23,85 @@ class LocalFileList;
 
 #define MAXREAD 524288
 
-class LocalStorage {
+class LocalStorage : public Core::EventReceiver {
 public:
   LocalStorage();
   ~LocalStorage();
-  LocalTransfer * passiveModeDownload(TransferMonitor *, const std::string &, const std::string &, bool, FTPConn *);
-  LocalTransfer * passiveModeDownload(TransferMonitor *, const std::string &, const std::string &, const std::string &, bool, FTPConn *);
-  LocalTransfer * passiveModeDownload(TransferMonitor *, const std::string &, bool, FTPConn *);
-  LocalTransfer * passiveModeUpload(TransferMonitor *, const std::string &, const std::string &, const std::string &, bool, FTPConn *);
-  LocalTransfer * activeModeDownload(TransferMonitor *, const std::string &, const std::string &, bool, FTPConn *);
-  LocalTransfer * activeModeDownload(TransferMonitor *, bool, FTPConn *);
-  LocalTransfer * activeModeUpload(TransferMonitor *, const std::string &, const std::string &, bool, FTPConn *);
-  BinaryData getTempFileContent(const std::string &) const;
-  BinaryData getFileContent(const std::string &) const;
-  const BinaryData & getStoreContent(int) const;
+  LocalTransfer * passiveModeDownload(TransferMonitor* tm, const std::string& file, bool ipv6, const std::string& host, int port, bool ssl, FTPConn* ftpconn);
+  LocalTransfer * passiveModeDownload(TransferMonitor* tm, const Path& path, const std::string & file, bool ipv6, const std::string & host, int port, bool ssl, FTPConn* ftpconn);
+  LocalTransfer * passiveModeDownload(TransferMonitor* tm, bool ipv6, const std::string& host, int port, bool ssl, FTPConn* ftpconn);
+  LocalTransfer * passiveModeUpload(TransferMonitor* tm, const Path& path, const std::string& file, bool ipv6, const std::string& host, int port, bool ssl, FTPConn* ftpconn);
+  LocalTransfer * activeModeDownload(TransferMonitor* tm, const Path& path, const std::string& file, bool ipv6, bool ssl, FTPConn* ftpconn);
+  LocalTransfer * activeModeDownload(TransferMonitor* tm, bool ipv6, bool ssl, FTPConn* ftpconn);
+  LocalTransfer * activeModeUpload(TransferMonitor* tm, const Path& path, const std::string& file, bool ipv6, bool ssl, FTPConn* ftpconn);
+  Core::BinaryData getTempFileContent(const std::string &) const;
+  Core::BinaryData getFileContent(const Path &) const;
+  const Core::BinaryData & getStoreContent(int) const;
   void purgeStoreContent(int);
-  void deleteFile(std::string);
-  std::string getTempPath() const;
+  int requestDelete(const Path & filename, bool care = false);
+  bool deleteFile(const Path & filename);
+  static bool deleteFileAbsolute(const Path & filename);
+  static bool deleteRecursive(const Path & path);
+  int requestMakeDirectory(const Path& path, const std::string& dirname);
+  int requestMove(const Path& srcpath, const Path& dstpath);
+  util::Result getMakeDirResult(int requestid);
+  util::Result getMoveResult(int requestid);
+  bool getDeleteResult(int requestid);
+  static LocalPathInfo getPathInfo(const Path & path);
+  static LocalPathInfo getPathInfo(const std::list<Path> & paths);
+  int requestPathInfo(const Path & path);
+  int requestPathInfo(const std::list<Path> & paths);
+  LocalPathInfo getPathInfo(int requestid);
+  static LocalFile getLocalFile(const Path & path);
+  const Path & getTempPath() const;
   void setTempPath(const std::string &);
-  void storeContent(int, const BinaryData &);
-  std::string getDownloadPath() const;
-  void setDownloadPath(const std::string &);
-  static Pointer<LocalFileList> getLocalFileList(const std::string &);
-  unsigned long long int getFileSize(const std::string &);
-  static bool directoryExistsReadable(const std::string &);
-  static bool directoryExistsWritable(const std::string &);
-  static bool createDirectory(const std::string &);
-  static bool createDirectory(const std::string &, bool);
-  static bool createDirectoryRecursive(std::string);
+  void storeContent(int, const Core::BinaryData &);
+  const Path & getDownloadPath() const;
+  void setDownloadPath(const Path &);
+  static std::shared_ptr<LocalFileList> getLocalFileList(const Path& path);
+  static std::shared_ptr<LocalFileList> getLocalFileListPrune(const Path& path, const std::string& remainingfile);
+  static bool updateLocalFileList(const std::shared_ptr<LocalFileList>& filelist);
+  static bool updateLocalFileListPrune(const std::shared_ptr<LocalFileList>& filelist, const std::string& remainingfile);
+  int requestLocalFileList(const Path & path);
+  bool requestReady(int requestid) const;
+  std::shared_ptr<LocalFileList> getLocalFileList(int requestid);
+  void asyncTaskComplete(int type, void * data);
+  unsigned long long int getFileSize(const Path &);
   bool getUseActiveModeAddress() const;
-  std::string getActiveModeAddress() const;
+  const std::string& getActiveModeAddress4() const;
+  const std::string& getActiveModeAddress6() const;
   int getActivePortFirst() const;
   int getActivePortLast() const;
   void setUseActiveModeAddress(bool);
-  void setActiveModeAddress(const std::string &);
+  void setActiveModeAddress4(const std::string& address);
+  void setActiveModeAddress6(const std::string& address);
   void setActivePortFirst(int);
   void setActivePortLast(int);
   int getNextActivePort();
-  std::string localTransferPassiveString(LocalTransfer *) const;
+  Core::StringResult getAddress4(int fallbacksockid) const;
+  Core::StringResult getAddress6(int fallbacksockid) const;
+  TransferProtocol getTransferProtocol() const;
+  void setTransferProtocol(TransferProtocol protocol);
+  void executeAsyncRequest(LocalStorageRequestData * data);
 private:
-  static bool directoryExistsAccessible(const std::string &, bool);
-  std::map<int, BinaryData> content;
-  static std::string getHostFromPASVString(std::string);
-  static int getPortFromPASVString(const std::string &);
+  void deleteRequestData(LocalStorageRequestData * reqdata);
+  static LocalPathInfo getPathInfo(const Path & path, int currentdepth);
+  std::map<int, Core::BinaryData> content;
   LocalDownload * getAvailableLocalDownload();
   LocalUpload * getAvailableLocalUpload();
   std::list<LocalDownload *> localdownloads;
   std::list<LocalUpload *> localuploads;
-  std::string temppath;
-  std::string downloadpath;
+  std::map<int, LocalStorageRequestData *> readyrequests;
+  Path temppath;
+  Path downloadpath;
   int storeidcounter;
   bool useactivemodeaddress;
-  std::string activemodeaddress;
+  std::string activemodeaddress4;
+  std::string activemodeaddress6;
   int activeportfirst;
   int activeportlast;
   int currentactiveport;
+  int requestidcounter;
+  TransferProtocol transferprotocol;
+  int nextlocaltransferid;
 };

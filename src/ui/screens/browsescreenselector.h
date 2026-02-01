@@ -11,23 +11,26 @@
 #define BROWSESCREENSELECTOR_HOME "$HOME$"
 
 class Ui;
+class VirtualView;
 class BrowseScreenAction;
+class KeyBinds;
 
 class BrowseScreenSelector : public BrowseScreenSub {
 public:
-  BrowseScreenSelector(Ui *);
+  BrowseScreenSelector(Ui* ui, KeyBinds& keybinds);
   ~BrowseScreenSelector();
-  BrowseScreenType type() const;
-  void redraw(unsigned int, unsigned int, unsigned int);
-  void update();
-  void command(std::string, std::string);
-  BrowseScreenAction keyPressed(unsigned int);
-  std::string getLegendText() const;
-  std::string getInfoLabel() const;
-  std::string getInfoText() const;
-  void setFocus(bool);
+  BrowseScreenType type() const override;
+  void redraw(unsigned int, unsigned int, unsigned int) override;
+  void update() override;
+  BrowseScreenAction keyPressed(unsigned int) override;
+  std::string getLegendText(int scope) const override;
+  std::string getInfoLabel() const override;
+  std::string getInfoText() const override;
+  void setFocus(bool) override;
+  BrowseScreenAction tryJumpSection(const std::string& section) override;
 private:
-  Ui * ui;
+  Ui* ui;
+  VirtualView* vv;
   unsigned int row;
   unsigned int col;
   unsigned int coloffset;
@@ -36,4 +39,5 @@ private:
   std::vector<std::pair<std::string, std::string> > entries;
   unsigned int pointer;
   unsigned int currentviewspan;
+  bool gotomode;
 };

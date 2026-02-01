@@ -1,19 +1,18 @@
 #include "localupload.h"
 
+#include <cassert>
 #include <cstring>
-#include <stdlib.h>
+#include <cstdlib>
 #include <unistd.h>
 
 #include "core/iomanager.h"
-#include "core/tickpoke.h"
+#include "core/util.h"
 #include "globalcontext.h"
 #include "eventlog.h"
 #include "transfermonitor.h"
 #include "ftpconn.h"
 #include "localstorage.h"
-#include "util.h"
-
-extern GlobalContext * global;
+#include "path.h"
 
 LocalUpload::LocalUpload() :
   filepos(0)
@@ -22,18 +21,18 @@ LocalUpload::LocalUpload() :
   buflen = CHUNK;
 }
 
-void LocalUpload::engage(TransferMonitor * tm, const std::string & path, const std::string & filename, const std::string & addr, int port, bool ssl, FTPConn * ftpconn) {
-  init(tm, ftpconn, path, filename, ssl, port, true);
-  sockid = global->getIOManager()->registerTCPClientSocket(this, addr, port);
+void LocalUpload::engage(TransferMonitor* tm, int localtransferid, const Path& path, const std::string& filename, bool ipv6, const std::string& addr, int port, bool ssl, FTPConn* ftpconn) {
+  init(tm, localtransferid, ftpconn, path, filename, ssl, true, port);
+  sockid = interConnect(Address(addr, port, ipv6 ? Core::AddressFamily::IPV6 : Core::AddressFamily::IPV4), ftpconn->getDataProxy());
 }
 
-bool LocalUpload::engage(TransferMonitor * tm, const std::string & path, const std::string & filename, int port, bool ssl, FTPConn * ftpconn) {
-  init(tm, ftpconn, path, filename, ssl, port, false);
-  sockid = global->getIOManager()->registerTCPServerSocket(this, port);
+bool LocalUpload::engage(TransferMonitor* tm, int localtransferid, const Path& path, const std::string& filename, bool ipv6, bool ssl, FTPConn* ftpconn) {
+  init(tm, localtransferid, ftpconn, path, filename, ssl, false);
+  sockid = interListen(ipv6 ? Core::AddressFamily::IPV6 : Core::AddressFamily::IPV4, ftpconn->getDataProxy());
   return sockid != -1;
 }
 
-void LocalUpload::init(TransferMonitor * tm, FTPConn * ftpconn, const std::string & path, const std::string & filename, bool ssl, int port, bool passivemode) {
+void LocalUpload::init(TransferMonitor* tm, int localtransferid, FTPConn* ftpconn, const Path& path, const std::string& filename, bool ssl, bool passivemode, int port) {
   this->tm = tm;
   this->ftpconn = ftpconn;
   this->path = path;
@@ -42,86 +41,127 @@ void LocalUpload::init(TransferMonitor * tm, FTPConn * ftpconn, const std::strin
   this->port = port;
   this->passivemode = passivemode;
   filepos = 0;
-  inuse = true;
   fileopened = false;
-  if (!passivemode) {
-    global->getTickPoke()->startPoke(this, "LocalUpload", 5000, 0);
+  activate(localtransferid);
+}
+
+void LocalUpload::FDInterConnected(int sockid) {
+  if (sockid != this->sockid) {
+    return;
   }
-}
-
-bool LocalUpload::active() const {
-  return inuse;
-}
-
-void LocalUpload::FDConnected(int sockid) {
+  tm->localInfo("Connection established");
+  if (ssl) {
+    tm->localInfo("Performing TLS handshake");
+    global->getIOManager()->negotiateSSLConnect(sockid, ftpconn->getSockId());
+  }
   if (passivemode) {
     tm->activeStarted();
   }
-  openFile(true);
-  if (ssl) {
-    global->getIOManager()->negotiateSSLConnect(sockid, (EventReceiver *)ftpconn);
+  if (!openFile(true)) {
+    return;
   }
-  else {
+  if (!ssl) {
     sendChunk();
   }
 }
 
-void LocalUpload::FDDisconnected(int sockid) {
+void LocalUpload::FDInterDisconnected(int sockid, Core::DisconnectType reason, const std::string& details) {
+  if (sockid != this->sockid) {
+    return;
+  }
   if (fileopened) {
     filestream.close();
   }
-  inuse = false;
+  deactivate();
+  tm->localError(details);
   tm->sourceError(TM_ERR_OTHER);
+  this->sockid = -1;
 }
 
-void LocalUpload::FDSSLSuccess(int sockid) {
-  ftpconn->printCipher(sockid);
+void LocalUpload::FDSSLSuccess(int sockid, const std::string& cipher) {
+  if (sockid != this->sockid) {
+    return;
+  }
+  tm->localInfo("TLS handshake successful");
+  ftpconn->printCipher(cipher);
+  bool sessionreused = global->getIOManager()->getSSLSessionReused(sockid);
+  tm->sslDetails(cipher, sessionreused);
   sendChunk();
 }
 
 void LocalUpload::sendChunk() {
-  util::assert(fileopened);
+  assert(fileopened);
   filestream.read(buf, buflen);
+  if (filestream.fail() && !filestream.eof()) {
+    std::string error = Core::util::getStrError(errno);
+    filestream.close();
+    global->getIOManager()->closeSocket(sockid);
+    FDFail(sockid, "Failed reading file " + (path / filename).toString() + ": " + error);
+    return;
+  }
   int gcount = filestream.gcount();
   if (gcount == 0) {
     filestream.close();
+    tm->localInfo("Upload finished, closing connection");
     global->getIOManager()->closeSocket(sockid);
     tm->sourceComplete();
-    inuse = false;
+    deactivate();
+    return;
   }
   filepos += gcount;
   global->getIOManager()->sendData(sockid, buf, gcount);
 }
 
-void LocalUpload::FDSendComplete(int sockid) {
+void LocalUpload::FDInterSendComplete(int sockid) {
+  if (sockid != this->sockid) {
+    return;
+  }
   sendChunk();
 }
 
-void LocalUpload::FDSSLFail(int sockid) {
-  if (fileopened) { // this can theoretically happen mid-transfer
-    filestream.close();
+void LocalUpload::FDFail(int sockid, const std::string& error) {
+  if (sockid == -1 || sockid != this->sockid) {
+    return;
   }
-  global->getIOManager()->closeSocket(sockid);
-  inuse = false;
+  deactivate();
+  tm->localError(error);
   tm->sourceError(TM_ERR_OTHER);
+  this->sockid = -1;
 }
 
-void LocalUpload::FDFail(int sockid, std::string error) {
-  inuse = false;
-  if (sockid != -1) {
-    tm->sourceError(TM_ERR_OTHER);
+void LocalUpload::FDInterData(int sockid, char* data, unsigned int len) {
+  if (sockid != this->sockid) {
+    return;
   }
-}
-
-void LocalUpload::FDData(int sockid, char * data, unsigned int len) {
   if (fileopened) {
     filestream.close();
   }
-  inuse = false;
+  deactivate();
   global->getIOManager()->closeSocket(sockid);
+  tm->localError("Received data unexpectedly, closing connection");
   tm->sourceError(TM_ERR_OTHER);
+}
+
+void LocalUpload::FDInterListening(int sockid, const Address& addr) {
+  if (sockid != this->sockid) {
+    return;
+  }
+  tm->passiveReady(addr.host, addr.port);
 }
 
 unsigned long long int LocalUpload::size() const {
   return filepos;
+}
+
+void LocalUpload::disconnect() {
+  if (sockid == -1) {
+    return;
+  }
+  if (fileopened) {
+    filestream.close();
+  }
+  deactivate();
+  global->getIOManager()->closeSocket(sockid);
+  tm->localInfo("Closing connection");
+  tm->sourceError(TM_ERR_OTHER);
 }

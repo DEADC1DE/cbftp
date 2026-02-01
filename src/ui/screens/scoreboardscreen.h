@@ -1,8 +1,9 @@
 #pragma once
 
-#include "../../core/pointer.h"
+#include <memory>
 
 #include "../uiwindow.h"
+#include "../menuselectoption.h"
 
 class Engine;
 class ScoreBoard;
@@ -12,13 +13,14 @@ public:
   ScoreBoardScreen(Ui *);
   ~ScoreBoardScreen();
   void initialize(unsigned int, unsigned int);
-  void redraw();
-  void update();
-  bool keyPressed(unsigned int);
-  std::string getLegendText() const;
-  std::string getInfoLabel() const;
-  std::string getInfoText() const;
+  void redraw() override;
+  bool keyPressed(unsigned int) override;
+  std::string getLegendText() const override;
+  std::string getInfoLabel() const override;
+  std::string getInfoText() const override;
 private:
   Engine * engine;
-  Pointer<ScoreBoard> scoreboard;
+  std::shared_ptr<ScoreBoard> scoreboard;
+  MenuSelectOption table;
+  unsigned int currentviewspan;
 };

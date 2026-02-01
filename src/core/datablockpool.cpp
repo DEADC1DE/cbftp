@@ -2,23 +2,31 @@
 
 #include <cstdlib>
 
-#include "scopelock.h"
+namespace Core {
 
-DataBlockPool::DataBlockPool() :
-  totalblocks(0),
-  waitingforblocks(false) {
-  ScopeLock lock(blocklock);
+#define BLOCKSIZE 16384
+
+DataBlockPool::DataBlockPool() : totalblocks(0) {
+  std::lock_guard<std::mutex> lock(blocklock);
   allocateNewBlocks();
 }
 
-char * DataBlockPool::getBlock() {
-  char * block;
-  ScopeLock lock(blocklock);
-  if (blocks.empty()) {
+DataBlockPool::~DataBlockPool()
+{
+  std::lock_guard<std::mutex> lock(blocklock);
+  for (char* block : blocks) {
+    free(block);
+  }
+}
+
+char* DataBlockPool::getBlock() {
+  char* block;
+  std::lock_guard<std::mutex> lock(blocklock);
+  if (availableblocks.empty()) {
     allocateNewBlocks();
   }
-  block = blocks.back();
-  blocks.pop_back();
+  block = availableblocks.back();
+  availableblocks.pop_back();
   return block;
 }
 
@@ -26,37 +34,18 @@ const int DataBlockPool::blockSize() const {
   return BLOCKSIZE;
 }
 
-void DataBlockPool::returnBlock(char * block) {
-  ScopeLock lock(blocklock);
-  blocks.push_back(block);
-  if (waitingforblocks) {
-    if (blocks.size() > currentMaxNumBlocks() / 2) {
-      waitingforblocks = false;
-      blocksem.post();
-    }
-  }
-}
-
-void DataBlockPool::awaitFreeBlocks() {
-  blocklock.lock();
-  if (blocks.size() < currentMaxNumBlocks() / 2) {
-    waitingforblocks = true;
-    blocklock.unlock();
-    blocksem.wait();
-  }
-  else {
-    blocklock.unlock();
-  }
+void DataBlockPool::returnBlock(char* block) {
+  std::lock_guard<std::mutex> lock(blocklock);
+  availableblocks.push_back(block);
 }
 
 void DataBlockPool::allocateNewBlocks() {
   for (int i = 0; i < 10; i++) {
-    char * block = (char *) malloc(BLOCKSIZE);
+    char* block = (char*) malloc(BLOCKSIZE);
     blocks.push_back(block);
+    availableblocks.push_back(block);
     totalblocks++;
   }
 }
 
-unsigned int DataBlockPool::currentMaxNumBlocks() const {
-  return totalblocks < MAXBLOCKS ? totalblocks : MAXBLOCKS;
-}
+} // namespace Core

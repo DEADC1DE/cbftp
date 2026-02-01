@@ -2,8 +2,7 @@
 
 #include <list>
 #include <map>
-
-#include "../../core/pointer.h"
+#include <memory>
 
 #include "../menuselectoption.h"
 #include "../uiwindow.h"
@@ -19,20 +18,15 @@ public:
   GlobalOptionsScreen(Ui *);
   ~GlobalOptionsScreen();
   void initialize(unsigned int, unsigned int);
-  void update();
-  void redraw();
-  bool keyPressed(unsigned int);
-  std::string getLegendText() const;
-  std::string getInfoLabel() const;
+  void update() override;
+  void redraw() override;
+  bool keyPressed(unsigned int) override;
+  std::string getInfoLabel() const override;
 private:
   MenuSelectOption mso;
   RemoteCommandHandler * rch;
   SiteManager * sm;
   LocalStorage * ls;
-  std::string currentlegendtext;
-  std::string defaultlegendtext;
-  bool active;
-  Pointer<MenuSelectOptionElement> activeelement;
   std::map<int, std::string> interfacemap;
-  Pointer<MenuSelectOptionTextArrow> defaultinterface;
+  std::shared_ptr<MenuSelectOptionTextArrow> bindinterface;
 };

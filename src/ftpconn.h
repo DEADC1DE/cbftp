@@ -1,105 +1,132 @@
 #pragma once
 
 #include <list>
+#include <memory>
 #include <string>
 
 #include "core/eventreceiver.h"
-#include "core/pointer.h"
+#include "core/types.h"
+#include "address.h"
 #include "ftpconnectowner.h"
+#include "path.h"
 
-enum FTPConnState {
-  STATE_DISCONNECTED,
-  STATE_CONNECTING,
-  STATE_AUTH_TLS,
-  STATE_USER,
-  STATE_PASS,
-  STATE_STAT,
-  STATE_PWD,
-  STATE_PROT_P,
-  STATE_PROT_C,
-  STATE_RAW,
-  STATE_CPSV,
-  STATE_PASV,
-  STATE_PORT,
-  STATE_CWD,
-  STATE_MKD,
-  STATE_PRET_RETR,
-  STATE_PRET_STOR,
-  STATE_RETR,
-  STATE_RETR_COMPLETE,
-  STATE_STOR,
-  STATE_STOR_COMPLETE,
-  STATE_ABOR,
-  STATE_QUIT,
-  STATE_USER_LOGINKILL,
-  STATE_PASS_LOGINKILL,
-  STATE_WIPE,
-  STATE_DELE,
-  STATE_NUKE,
-  STATE_LIST,
-  STATE_PRET_LIST,
-  STATE_LIST_COMPLETE,
-  STATE_SSCN_ON,
-  STATE_SSCN_OFF,
-  STATE_SSL_HANDSHAKE,
-  STATE_PASV_ABORT,
-  STATE_PBSZ,
-  STATE_TYPEI,
-  STATE_IDLE
-};
-
-enum ProtMode {
-  PROT_UNSET,
+enum class FTPConnState {
+  DISCONNECTED,
+  CONNECTING,
+  AUTH_TLS,
+  USER,
+  PASS,
+  LOGIN,
+  STAT,
+  PWD,
+  PROT_P,
   PROT_C,
-  PROT_P
+  RAW,
+  CPSV,
+  PASV,
+  PORT,
+  EPSV,
+  EPRT,
+  CEPR_ON,
+  CWD,
+  MKD,
+  PRET_RETR,
+  PRET_STOR,
+  RETR,
+  RETR_COMPLETE,
+  STOR,
+  STOR_COMPLETE,
+  ABOR,
+  QUIT,
+  USER_LOGINKILL,
+  PASS_LOGINKILL,
+  WIPE,
+  DELE,
+  RMD,
+  NUKE,
+  LIST,
+  PRET_LIST,
+  LIST_COMPLETE,
+  SSCN_ON,
+  SSCN_OFF,
+  SSL_HANDSHAKE,
+  PASV_ABORT,
+  PBSZ,
+  TYPEI,
+  XDUPE,
+  RNFR,
+  RNTO,
+  IDLE
 };
+
+enum class ProtMode {
+  UNSET,
+  C,
+  P
+};
+
+enum class FailureType {
+  UNDEFINED,
+  DUPE
+};
+
+namespace Core {
+class IOManager;
+}
 
 class FTPConnect;
 class SiteRace;
 class FileList;
 class SiteLogic;
-class IOManager;
 class RawBuffer;
 class Site;
 class ProxySession;
 class CommandOwner;
 class Proxy;
+class RawBufferCallback;
 
-#define RAWBUFMAXLEN 1024
-#define DATABUF 2048
+#define DATA_BUF_SIZE 2048
 
-class FTPConn : private EventReceiver, public FTPConnectOwner {
+class FTPConn : private Core::EventReceiver, public FTPConnectOwner {
   private:
-    std::list<Pointer<FTPConnect> > connectors;
+    std::list<std::shared_ptr<FTPConnect> > connectors;
     int nextconnectorid;
-    IOManager * iom;
-    RawBuffer * rawbuf;
-    RawBuffer * aggregatedrawbuf;
+    Core::IOManager * iom;
     ProxySession * proxysession;
-    char * databuf;
     unsigned int databuflen;
+    char * databuf;
     unsigned int databufpos;
     int databufcode;
     int id;
     bool processing;
+    bool allconnectattempted;
     SiteLogic * sl;
     std::string status;
-    Site * site;
+    std::shared_ptr<Site> site;
     int transferstatus;
     int sockid;
     FTPConnState state;
     bool aborted;
-    FileList * currentfl;
-    CommandOwner * currentco;
-    std::string currentpath;
+    std::shared_ptr<FileList> currentfl;
+    std::shared_ptr<CommandOwner> currentco;
+    Path currentpath;
     ProtMode protectedmode;
     bool sscnmode;
-    std::string targetpath;
+    bool ceprenabled;
+    Path targetpath;
     bool mkdtarget;
-    std::string mkdsect;
-    std::string mkdpath;
+    Path mkdsect;
+    Path mkdpath;
     std::list<std::string> mkdsubdirs;
+    RawBuffer * rawbuf;
+    RawBuffer * aggregatedrawbuf;
+    RawBuffer * cwdrawbuf;
     int ticker;
+    std::list<std::string> xdupelist;
+    bool xduperun;
+    bool typeirun;
+    bool cleanlyclosed;
+    Address connectedaddr;
     void AUTHTLSResponse();
     void USERResponse();
     void PASSResponse();
@@ -111,6 +138,9 @@ class FTPConn : private EventReceiver, public FTPConnectOwner {
     void CPSVResponse();
     void PASVResponse();
     void PORTResponse();
+    void EPSVResponse();
+    void EPRTResponse();
+    void CEPRONResponse();
     void CWDResponse();
     void MKDResponse();
     void PRETRETRResponse();
@@ -124,6 +154,7 @@ class FTPConn : private EventReceiver, public FTPConnectOwner {
     void QUITResponse();
     void WIPEResponse();
     void DELEResponse();
+    void RMDResponse();
     void NUKEResponse();
     void LISTResponse();
     void LISTComplete();
@@ -132,13 +163,27 @@ class FTPConn : private EventReceiver, public FTPConnectOwner {
     void PASVAbortResponse();
     void PBSZ0Response();
     void TYPEIResponse();
+    void XDUPEResponse();
+    void RNFRResponse();
+    void RNTOResponse();
     void proxySessionInit(bool);
     void sendEcho(const std::string &);
     void connectAllAddresses();
-    Proxy * getProxy() const;
+    Proxy* getProxy() const;
     void clearConnectors();
     void rawBufWrite(const std::string &);
     void rawBufWriteLine(const std::string &);
+    void doCWD(const Path& path, const std::shared_ptr<FileList>& fl, const std::shared_ptr<CommandOwner>& co);
+    void doMKD(const Path& path, const std::shared_ptr<FileList>& fl, const std::shared_ptr<CommandOwner>& co);
+    void parseXDUPEData();
+    void finishLogin();
+    void FDData(int sockid, char* data, unsigned int datalen) override;
+    void FDDisconnected(int sockid, Core::DisconnectType reason, const std::string& details) override;
+    void FDSSLSuccess(int sockid, const std::string& cipher) override;
+    void ftpConnectInfo(int id, const std::string& info) override;
+    void ftpConnectSuccess(int id, const Address& addr) override;
+    void ftpConnectFail(int id) override;
+    void tick(int message) override;
   public:
     int getId() const;
     void setId(int);
@@ -148,69 +193,81 @@ class FTPConn : private EventReceiver, public FTPConnectOwner {
     bool isProcessing() const;
     FTPConn(SiteLogic *, int);
     ~FTPConn();
-    int updateFileList(FileList *);
     void updateName();
-    std::string getCurrentPath() const;
+    const Path & getCurrentPath() const;
     void doUSER(bool);
     void doAUTHTLS();
     void doPWD();
     void doPROTP();
     void doPROTC();
-    void doRaw(std::string);
-    void doWipe(std::string, bool);
-    void doNuke(std::string, int, std::string);
-    void doDELE(std::string);
+    void doRaw(const std::string &);
+    void doWipe(const Path &, bool);
+    void doNuke(const Path &, int, const std::string &);
+    void doDELE(const Path &);
+    void doRMD(const Path &);
     void doSTAT();
-    void doSTAT(CommandOwner *, FileList *);
+    void doSTATBigL();
+    void doSTAT(const std::shared_ptr<CommandOwner>& co, const std::shared_ptr<FileList>& fl);
+    void doSTATBigL(const std::shared_ptr<CommandOwner>& co, const std::shared_ptr<FileList>& fl);
     void doLIST();
     void doLISTa();
-    void prepareLIST();
-    void prepareLIST(CommandOwner *, FileList *);
+    std::shared_ptr<FileList> newFileList() const;
+    void setListData(const std::shared_ptr<CommandOwner>& co, const std::shared_ptr<FileList>& fl);
     void doSTATla();
+    void doSTATBigLa();
     void doSSCN(bool);
     void doCPSV();
     void doPASV();
-    void doPORT(std::string);
-    void doCWD(std::string);
-    void doMKD(std::string);
-    void doPRETRETR(std::string);
-    void doRETR(std::string);
-    void doPRETSTOR(std::string);
-    void doSTOR(std::string);
+    void doEPSV();
+    void doEPRT(const std::string& host, int port);
+    void doPORT(const std::string& host, int port);
+    void doCEPRON();
+    void doCWD(const Path &, const std::shared_ptr<CommandOwner> & co = std::shared_ptr<CommandOwner>());
+    void doCWD(const std::shared_ptr<FileList>& fl, const std::shared_ptr<CommandOwner>& co = std::shared_ptr<CommandOwner>());
+    void doMKD(const Path &, const std::shared_ptr<CommandOwner> & co = std::shared_ptr<CommandOwner>());
+    void doMKD(const std::shared_ptr<FileList>& fl, const std::shared_ptr<CommandOwner>& co);
+    void doPRETRETR(const std::string &);
+    void doRETR(const std::string &);
+    void doPRETSTOR(const std::string &);
+    void doSTOR(const std::string &);
     void doPRETLIST();
     void abortTransfer();
     void abortTransferPASV();
     void doPBSZ0();
     void doTYPEI();
+    void doXDUPE();
     void doQUIT();
-    void doSSLHandshake();
+    void doRNFR(const std::string& from);
+    void doRNTO(const std::string& to);
     void disconnect();
     FTPConnState getState() const;
     std::string getConnectedAddress() const;
     std::string getInterfaceAddress() const;
+    bool isIPv6() const;
     ProtMode getProtectedMode() const;
     bool getSSCNMode() const;
-    void setMKDCWDTarget(std::string, std::string);
+    bool getCEPREnabled() const;
+    void setMKDCWDTarget(const Path &, const Path &);
     bool hasMKDCWDTarget() const;
-    std::string getTargetPath() const;
-    std::string getMKDCWDTargetSection() const;
-    std::string getMKDCWDTargetPath() const;
+    const Path & getTargetPath() const;
+    const Path & getMKDCWDTargetSection() const;
+    const Path & getMKDCWDTargetPath() const;
     void finishMKDCWDTarget();
-    std::list<std::string> * getMKDSubdirs();
+    const std::list<std::string> & getMKDSubdirs();
     RawBuffer * getRawBuffer() const;
-    static bool parseData(char *, unsigned int, char **, unsigned int &, unsigned int &, int &);
-    void FDData(int, char *, unsigned int);
-    void FDDisconnected(int);
-    void FDSSLSuccess(int);
-    void FDSSLFail(int);
-    void printCipher(int);
-    void ftpConnectInfo(int, const std::string &);
-    void ftpConnectSuccess(int);
-    void ftpConnectFail(int);
-    void tick(int);
-    FileList * currentFileList() const;
-    CommandOwner * currentCommandOwner() const;
-    void setCurrentCommandOwner(CommandOwner *);
+    RawBuffer * getCwdRawBuffer() const;
+    int getSockId() const;
+    bool isCleanlyClosed() const;
+    static bool parseData(char*, unsigned int, char**, unsigned int&, unsigned int&, int&);
+    void printCipher(const std::string& cipher);
+    void printLocalError(const std::string& info);
+    std::shared_ptr<FileList> currentFileList() const;
+    const std::shared_ptr<CommandOwner> & currentCommandOwner() const;
+    void resetCurrentCommandOwner();
     void parseFileList(char *, unsigned int);
     bool isConnected() const;
+    void setRawBufferCallback(RawBufferCallback *);
+    void unsetRawBufferCallback();
+    const std::list<std::string> & getXDUPEList() const;
+    Proxy* getDataProxy() const;
 };

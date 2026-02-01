@@ -1,12 +1,11 @@
 #include "potentialelement.h"
 
-PotentialElement::PotentialElement() {
-  this->site = NULL;
-  this->potential = 0;
-  this->site_dnslots = 0;
+#include "sitelogic.h"
+
+PotentialElement::PotentialElement() : site(NULL), potential(0), dstupslots(0) {
 }
 
-SiteLogic * PotentialElement::getSite() const {
+const std::shared_ptr<SiteLogic> & PotentialElement::getSite() const {
   return site;
 }
 
@@ -14,15 +13,22 @@ int PotentialElement::getPotential() const {
   return potential;
 }
 
-void PotentialElement::update(SiteLogic * site, int site_dnslots, int potential, std::string filename) {
+void PotentialElement::update(const std::shared_ptr<SiteLogic> & site, int dstupslots, int potential, const std::string & filename) {
   this->site = site;
-  this->site_dnslots = site_dnslots;
+  this->dstupslots = dstupslots;
   this->potential = potential;
   this->filename = filename;
 }
 
-int PotentialElement::getSiteDownloadSlots() const {
-  return site_dnslots;
+void PotentialElement::reset() {
+  site.reset();
+  potential = 0;
+  dstupslots = 0;
+  filename = "";
+}
+
+int PotentialElement::getDestinationSiteUploadSlots() const {
+  return dstupslots;
 }
 
 std::string PotentialElement::getFileName() const {

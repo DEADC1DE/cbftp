@@ -1,10 +1,10 @@
 #include "browsescreensite.h"
 
-#include <cctype>
 #include <algorithm>
+#include <cctype>
+#include <memory>
 
 #include "../../core/tickpoke.h"
-#include "../../core/pointer.h"
 #include "../../sitelogic.h"
 #include "../../sitelogicmanager.h"
 #include "../../site.h"
@@ -17,6 +17,11 @@
 #include "../../util.h"
 #include "../../timereference.h"
 #include "../../rawbuffer.h"
+#include "../../filelistdata.h"
+#include "../../sectionmanager.h"
+#include "../../section.h"
+
+#include <cassert>
 
 #include "../ui.h"
 #include "../uifile.h"
@@ -24,95 +29,102 @@
 #include "../menuselectoptiontextbutton.h"
 #include "../menuselectadjustableline.h"
 #include "../resizableelement.h"
+#include "../misc.h"
+#include "../keybinds.h"
 
 #include "browsescreenaction.h"
+#include "browsescreen.h"
 #include "rawdatascreen.h"
 
-extern GlobalContext * global;
-
-BrowseScreenSite::BrowseScreenSite(Ui * ui, std::string sitestr) {
-  this->ui = ui;
-  gotomodeticker = 0;
-  sitelogic = global->getSiteLogicManager()->getSiteLogic(sitestr);
-  site = sitelogic->getSite();
-  requestedpath = site->getBasePath();
+BrowseScreenSite::BrowseScreenSite(Ui* ui, BrowseScreen* parent,
+    KeyBinds& keybinds, const std::string& sitestr, const Path& path) :
+    BrowseScreenSub(keybinds), ui(ui), parent(parent), row(0), col(0),
+    coloffset(0), table(ui->getVirtualView()), currentviewspan(0),
+    resort(false), tickcount(0), gotomode(false), gotomodefirst(false),
+    gotomodeticker(0), filtermodeinput(false), filtermodeinputregex(false),
+    gotopathinput(false), sortmethod(UIFileList::SortMethod::COMBINED),
+    sitelogic(global->getSiteLogicManager()->getSiteLogic(sitestr)),
+    site(sitelogic->getSite()), spinnerpos(0), filelist(nullptr),
+    withinraceskiplistreach(false), focus(true), temphighlightline(false),
+    softselecting(false), lastinfo(LastInfo::NONE),
+    confirmaction(ConfirmAction::NONE), refreshfilelistafter(false),
+    nameonly(false)
+{
+  vv = &ui->getVirtualView();
   sitelogic->getAggregatedRawBuffer()->bookmark();
-  requestid = sitelogic->requestFileList(requestedpath);
-  virgin = true;
-  resort = false;
-  changedsort = false;
-  cwdfailed = false;
-  wipe = false;
-  wiperecursive = false;
-  wipesuccess = false;
-  wipefailed = false;
-  deleting = false;
-  deletingrecursive = false;
-  deletesuccess = false;
-  deletefailed = false;
-  nuking = false;
-  nukesuccess = false;
-  nukefailed = false;
-  gotomode = false;
-  withinraceskiplistreach = false;
-  focus = true;
-  currentviewspan = 0;
-  sortmethod = 0;
-  spinnerpos = 0;
-  filelist = NULL;
+  TimeReference::updateTime();
+  gotoPath(path != "" ? path : site->getBasePath());
+}
+
+BrowseScreenSite::BrowseScreenSite(Ui* ui, BrowseScreen* parent,
+    KeyBinds& keybinds, const std::string& sitestr, const std::string& section) :
+    BrowseScreenSub(keybinds), ui(ui), parent(parent), row(0), col(0),
+    coloffset(0), table(ui->getVirtualView()), currentviewspan(0),
+    resort(false), tickcount(0), gotomode(false), gotomodefirst(false),
+    gotomodeticker(0), filtermodeinput(false), filtermodeinputregex(false),
+    gotopathinput(false), sortmethod(UIFileList::SortMethod::COMBINED),
+    sitelogic(global->getSiteLogicManager()->getSiteLogic(sitestr)),
+    site(sitelogic->getSite()), spinnerpos(0), filelist(nullptr),
+    withinraceskiplistreach(false), focus(true), temphighlightline(false),
+    softselecting(false), lastinfo(LastInfo::NONE),
+    confirmaction(ConfirmAction::NONE), refreshfilelistafter(false),
+    nameonly(false)
+{
+  vv = &ui->getVirtualView();
+  sitelogic->getAggregatedRawBuffer()->bookmark();
+  TimeReference::updateTime();
+  if (!section.empty()) {
+    BrowseScreenAction action = tryJumpSection(section);
+    if (action.getOp() == BROWSESCREENACTION_CHDIR) {
+      return;
+    }
+  }
+  gotoPath(site->getBasePath());
   TimeReference::updateTime();
 }
 
 BrowseScreenSite::~BrowseScreenSite() {
   disableGotoMode();
-  if (virgin) {
-    sitelogic->getAggregatedRawBuffer()->uiWatching(false);
+  if (!list.isInitialized()) {
+    sitelogic->getAggregatedRawBuffer()->setUiWatching(false);
   }
 }
 
 BrowseScreenType BrowseScreenSite::type() const {
-  return BROWSESCREEN_SITE;
+  return BrowseScreenType::SITE;
 }
 
 void BrowseScreenSite::redraw(unsigned int row, unsigned int col, unsigned int coloffset) {
+  row = row - ((filtermodeinput || filtermodeinputregex || gotopathinput) ? 2 : 0);
   this->row = row;
   this->col = col;
   this->coloffset = coloffset;
-  if (virgin) {
-    sitelogic->getAggregatedRawBuffer()->uiWatching(true);
+  if (!list.isInitialized()) {
+    sitelogic->getAggregatedRawBuffer()->setUiWatching(true);
     unsigned int linessincebookmark = sitelogic->getAggregatedRawBuffer()->linesSinceBookmark();
     if (!linessincebookmark) {
-      ui->printStr(0, coloffset + 1, "Awaiting slot...");
+      vv->putStr(0, coloffset + 1, "Awaiting slot...");
     }
     else {
       unsigned int linestoprint = linessincebookmark > row ? row : linessincebookmark;
-      RawDataScreen::printRawBufferLines(ui, sitelogic->getAggregatedRawBuffer(), linestoprint, col, coloffset);
+      RawDataScreen::printRawBufferLines(vv, sitelogic->getAggregatedRawBuffer(), linestoprint, col, coloffset);
     }
     return;
   }
-  if (resort == true) sort();
+  if (resort == true) {
+    list.sortMethod(sortmethod);
+    resort = false;
+  }
   unsigned int position = list.currentCursorPosition();
-  unsigned int pagerows = (unsigned int) row / 2;
   unsigned int listsize = list.size();
-  if (position < currentviewspan || position >= currentviewspan + row) {
-    if (position < pagerows) {
-      currentviewspan = 0;
-    }
-    else {
-      currentviewspan = position - pagerows;
-    }
-  }
-  if (currentviewspan + row >= listsize && listsize + 1 >= row) {
-    currentviewspan = listsize + 1 - row;
-    if (currentviewspan > position) {
-      currentviewspan = position;
-    }
-  }
+  adaptViewSpan(currentviewspan, row, position, listsize);
+
   const std::vector<UIFile *> * uilist = list.getSortedList();
   int maxnamelen = 0;
-  for (unsigned int i = 0; i < uilist->size(); i++) {
-    if ((*uilist)[i] != NULL) {
-      int len = (*uilist)[i]->getName().length();
+  for (unsigned int i = 0; i + currentviewspan < uilist->size() && i < row; i++) {
+    unsigned int listi = i + currentviewspan;
+    if ((*uilist)[listi] != NULL) {
+      int len = (*uilist)[listi]->getName().length();
       if (len > maxnamelen) {
         maxnamelen = len;
       }
@@ -123,15 +135,10 @@ void BrowseScreenSite::redraw(unsigned int row, unsigned int col, unsigned int c
     separatortext += "-";
   }
 
-  std::string prepend = list.getPath() + "/";
+  Path prepend = list.getPath();
   if (withinraceskiplistreach) {
-    std::string subpathinracepath;
-    std::string subpath = list.getPath().substr(closestracesectionpath.length() + 1);
-    size_t subdirpos = subpath.find("/");
-    if (subdirpos != std::string::npos) {
-      subpathinracepath = subpath.substr(subdirpos + 1) + "/";
-    }
-    prepend = subpathinracepath;
+    Path subpath = list.getPath() - closestracesectionpath;
+    prepend = subpath.cutLevels(-1);
   }
 
   table.reset();
@@ -140,15 +147,29 @@ void BrowseScreenSite::redraw(unsigned int row, unsigned int col, unsigned int c
     unsigned int listi = i + currentviewspan;
     UIFile * uifile = (*uilist)[listi];
     if (uifile == NULL) {
-      addFileDetails(i, separatortext);
+      addFileDetails(table, coloffset, i, separatortext);
       continue;
     }
-    bool selected = uifile == list.cursoredFile();
+    bool cursored = uifile == list.cursoredFile();
     std::string prepchar = " ";
     bool isdir = uifile->isDirectory();
-    bool allowed = withinraceskiplistreach ?
-        global->getSkipList()->isAllowed(prepend + uifile->getName(), isdir) :
-        global->getSkipList()->isAllowed(prepend + uifile->getName(), isdir, false);
+    Path testpath = prepend / uifile->getName();
+    SkipList * sectionskiplist = nullptr;
+    Section * section = global->getSectionManager()->getSection(closestracesection);
+    if (section) {
+      sectionskiplist = &section->getSkipList();
+    }
+    SkipListMatch match = site->getSkipList().check((prepend / uifile->getName()).toString(), isdir, withinraceskiplistreach, sectionskiplist);
+    if (match.action == SKIPLIST_SIMILAR) {
+      if (!filelist->similarChecked()) {
+        filelist->checkSimilar(&site->getSkipList(), sectionskiplist);
+      }
+    }
+    bool allowed = !(match.action == SKIPLIST_DENY ||
+                    (match.action == SKIPLIST_UNIQUE &&
+                     filelist->containsPatternBefore(match.matchpattern, isdir, uifile->getName())) ||
+                    (match.action == SKIPLIST_SIMILAR &&
+                     filelist->containsUnsimilar(uifile->getName())));
     if (isdir) {
       if (allowed) {
         prepchar = "#";
@@ -164,214 +185,441 @@ void BrowseScreenSite::redraw(unsigned int row, unsigned int col, unsigned int c
       prepchar = "L";
     }
     std::string owner = uifile->getOwner() + "/" + uifile->getGroup();
-    addFileDetails(i, prepchar, uifile->getName(), uifile->getSizeRepr(), uifile->getLastModified(), owner, true, selected);
+    addFileDetails(table, coloffset, i, uifile->getName(), prepchar, uifile->getSizeRepr(),
+        uifile->getLastModified(), owner, true, cursored, uifile, nameonly);
   }
   table.adjustLines(col - 3);
   table.checkPointer();
-  bool highlight;
+  std::shared_ptr<MenuSelectAdjustableLine> highlightline;
   for (unsigned int i = 0; i < table.size(); i++) {
-    Pointer<ResizableElement> re = table.getElement(i);
-    highlight = false;
-    if (table.getSelectionPointer() == i) {
-      highlight = true;
-    }
+    std::shared_ptr<ResizableElement> re = std::static_pointer_cast<ResizableElement>(table.getElement(i));
+    bool cursored = table.getSelectionPointer() == i;
+    bool softselected = re->getOrigin() && static_cast<UIFile *>(re->getOrigin())->isSoftSelected();
+    bool hardselected = re->getOrigin() && static_cast<UIFile *>(re->getOrigin())->isHardSelected();
+    bool highlight = cursored || softselected || hardselected;
     if (re->isVisible()) {
-      ui->printStr(re->getRow(), re->getCol(), re->getLabelText(), highlight && focus);
-    }
-  }
-  unsigned int slidersize = 0;
-  unsigned int sliderstart = 0;
-  if (listsize > row) {
-    slidersize = (row * row) / listsize;
-    sliderstart = (row * currentviewspan) / listsize;
-    if (slidersize == 0) {
-      slidersize++;
-    }
-    if (slidersize == row) {
-      slidersize--;
-    }
-    if (sliderstart + slidersize > row || currentviewspan + row >= listsize) {
-      sliderstart = row - slidersize;
-    }
-    for (unsigned int i = 0; i < row; i++) {
-      if (i >= sliderstart && i < sliderstart + slidersize) {
-        ui->printChar(i, coloffset + col - 1, ' ', true);
+      if ((cursored && softselected) || (cursored && hardselected) || (softselected && hardselected)) {
+        printFlipped(ui, re);
       }
       else {
-        ui->printChar(i, coloffset + col - 1, BOX_VLINE);
+        vv->putStr(re->getRow(), re->getCol(), re->getLabelText(), highlight && focus);
       }
     }
+    if (cursored && (temphighlightline ^ ui->getHighlightEntireLine())) {
+      highlightline = table.getAdjustableLine(re);
+    }
   }
+  if (highlightline) {
+    std::pair<unsigned int, unsigned int> minmaxcol = highlightline->getMinMaxCol();
+    vv->highlightOn(highlightline->getRow(), minmaxcol.first, minmaxcol.second - minmaxcol.first + 1);
+  }
+  printSlider(vv, row, coloffset + col - 1, listsize, currentviewspan);
+
   if (listsize == 0) {
-    ui->printStr(0, coloffset + 3, "(empty directory)");
+    vv->putStr(0, coloffset + 3, "(empty directory)");
+  }
+  if (filtermodeinput || filtermodeinputregex || gotopathinput) {
+    std::string oldtext = bottomlinetextfield.getData();
+    bottomlinetextfield = MenuSelectOptionTextField("filter", row + 1, 1, "", oldtext,
+        col - 20, 512, false);
+    ui->showCursor();
   }
   update();
 }
 
 void BrowseScreenSite::update() {
-  if (requestid >= 0 && sitelogic->requestReady(requestid)) {
-    tickcount = 0;
-    if (wipe) {
-      bool wipestatus = sitelogic->finishRequest(requestid);
-      requestid = -1;
-      wipe = false;
-      if (wipestatus) {
-        wipesuccess = true;
-        if (list.getPath() == wipepath) {
-          refreshFilelist();
-        }
-      }
-      else {
-        wipefailed = true;
-      }
-    }
-    else if (deleting) {
-      bool deletestatus = sitelogic->finishRequest(requestid);
-      requestid = -1;
-      deleting = false;
-      if (deletestatus) {
-        deletesuccess = true;
-        if (list.getPath() == wipepath) {
-          refreshFilelist();
-        }
-      }
-      else {
-        deletefailed = true;
-      }
-    }
-    else if (nuking) {
-      bool nukestatus = sitelogic->finishRequest(requestid);
-      requestid = -1;
-      nuking = false;
-      if (nukestatus) {
-        nukesuccess = true;
-      }
-      else {
-        nukefailed = true;
-      }
-      refreshFilelist();
-    }
-    else {
-      FileList * newfilelist = sitelogic->getFileList(requestid);
-      if (newfilelist == NULL) {
-        cwdfailed = true;
-        sitelogic->finishRequest(requestid);
-        requestid = -1;
-      }
-      else {
-        filelist = newfilelist;
-        if (!virgin) {
-          if (list.cursoredFile() != NULL) {
-            selectionhistory.push_front(std::pair<std::string, std::string>(list.getPath(), list.cursoredFile()->getName()));
-          }
-        }
-        else {
-          sitelogic->getAggregatedRawBuffer()->uiWatching(false);
-          virgin = false;
-        }
-        unsigned int position = 0;
-        bool separatorsenabled = false;
-        if (list.getPath() == filelist->getPath()) {
-          position = list.currentCursorPosition();
-          separatorsenabled = list.separatorsEnabled();
-        }
-        else {
-          currentviewspan = 0;
-        }
-        list.parse(filelist);
-        sitelogic->finishRequest(requestid);
-        requestid = -1;
-        if (separatorsenabled) {
-          list.toggleSeparators();
-        }
-        sort();
-        if (position) {
-          list.setCursorPosition(position);
-        }
-        std::string path = list.getPath();
-        for (std::list<std::pair<std::string, std::string> >::iterator it = selectionhistory.begin(); it != selectionhistory.end(); it++) {
-          if (it->first == path) {
-            list.selectFileName(it->second);
-            selectionhistory.erase(it);
-            break;
-          }
-        }
-        std::list<std::string> sections = site->getSectionsForPartialPath(path);
-        int dirlevels = countDirLevels(path);
-        withinraceskiplistreach = false;
-        int closestsectiondirlevel = -1;
-        for (std::list<std::string>::iterator it = sections.begin(); it != sections.end(); it++) {
-          std::string sectionpath = site->getSectionPath(*it);
-          int dirleveldifference = dirlevels - countDirLevels(sectionpath);
-          if (dirleveldifference > 0) {
-            withinraceskiplistreach = true;
-            if (dirleveldifference < closestsectiondirlevel || closestsectiondirlevel < 0) {
-              closestsectiondirlevel = dirleveldifference;
-              closestracesectionpath = sectionpath;
-            }
-          }
-          else {
-            withinraceskiplistreach = false;
-            break;
-          }
-        }
-        ui->redraw();
-        //delete filelist;
-      }
-    }
-    ui->setInfo();
+  if (handleReadyRequests()) {
     return;
   }
-  if (virgin) {
+  if (!list.isInitialized()) {
     ui->redraw();
   }
   if (table.size()) {
-    Pointer<ResizableElement> re = table.getElement(table.getLastSelectionPointer());
-    ui->printStr(re->getRow(), re->getCol(), re->getLabelText());
-    re = table.getElement(table.getSelectionPointer());
-    ui->printStr(re->getRow(), re->getCol(), re->getLabelText(), focus);
+    std::shared_ptr<ResizableElement> re = std::static_pointer_cast<ResizableElement>(table.getElement(table.getLastSelectionPointer()));
+    bool softselected = re->getOrigin() && static_cast<UIFile *>(re->getOrigin())->isSoftSelected();
+    bool hardselected = re->getOrigin() && static_cast<UIFile *>(re->getOrigin())->isHardSelected();
+    std::shared_ptr<MenuSelectAdjustableLine> highlightline = table.getAdjustableLine(re);
+    std::pair<unsigned int, unsigned int> minmaxcol = highlightline->getMinMaxCol();
+    vv->highlightOff(highlightline->getRow(), minmaxcol.first, minmaxcol.second - minmaxcol.first + 1);
+    if (softselected && hardselected) {
+      printFlipped(ui, re);
+    }
+    else {
+      vv->putStr(re->getRow(), re->getCol(), re->getLabelText(), softselected || hardselected);
+    }
+    re = std::static_pointer_cast<ResizableElement>(table.getElement(table.getSelectionPointer()));
+    bool selected = re->getOrigin() && (static_cast<UIFile *>(re->getOrigin())->isSoftSelected() ||
+                                        static_cast<UIFile *>(re->getOrigin())->isHardSelected());
+    highlightline = table.getAdjustableLine(re);
+    minmaxcol = highlightline->getMinMaxCol();
+    if ((temphighlightline ^ ui->getHighlightEntireLine()) && focus) {
+      vv->highlightOn(highlightline->getRow(), minmaxcol.first, minmaxcol.second - minmaxcol.first + 1);
+    }
+    else {
+      vv->highlightOff(highlightline->getRow(), minmaxcol.first, minmaxcol.second - minmaxcol.first + 1);
+    }
+    if (selected && focus) {
+      printFlipped(ui, re);
+    }
+    else {
+      vv->putStr(re->getRow(), re->getCol(), re->getLabelText(), focus);
+    }
+  }
+  if (filtermodeinput || filtermodeinputregex || gotopathinput) {
+    std::string pretag = filtermodeinput ? "[Filter(s)]: " : (filtermodeinputregex ? "[Regex filter]: " : "[Go to path]: ");
+    vv->putStr(bottomlinetextfield.getRow(), coloffset + bottomlinetextfield.getCol(), pretag + bottomlinetextfield.getContentText());
+    vv->moveCursor(bottomlinetextfield.getRow(), coloffset + bottomlinetextfield.getCol() + pretag.length() + bottomlinetextfield.cursorPosition());
   }
 }
 
-void BrowseScreenSite::command(std::string command, std::string arg) {
-  if (command == "yes") {
-    if (wipe) {
-      requestid = sitelogic->requestWipe(wipetarget, wiperecursive);
+bool BrowseScreenSite::handleReadyRequests() {
+  bool handled = false;
+  while (!requests.empty() && sitelogic->requestReady(requests.front().id)) {
+    handled = true;
+    const BrowseScreenRequest & request = requests.front();
+    switch (request.type) {
+      case BrowseScreenRequestType::FILELIST:
+        loadFileListFromRequest();
+        break;
+      case BrowseScreenRequestType::NUKE: {
+        bool success = sitelogic->finishRequest(request.id);
+        if (success) {
+          lastinfo = LastInfo::NUKE_SUCCESS;
+          if (list.getPath() == request.path) {
+            refreshfilelistafter = true;
+          }
+        }
+        else {
+          lastinfo = LastInfo::NUKE_FAILED;
+        }
+        lastinfotarget = request.files.front().first;
+        tickcount = 0;
+        break;
+      }
+      case BrowseScreenRequestType::WIPE: {
+        bool success = sitelogic->finishRequest(request.id);
+        if (success) {
+          lastinfo = LastInfo::WIPE_SUCCESS;
+          if (list.getPath() == request.path) {
+            refreshfilelistafter = true;
+          }
+        }
+        else {
+          lastinfo = LastInfo::WIPE_FAILED;
+        }
+        lastinfotarget = request.files.front().first;
+        tickcount = 0;
+        break;
+      }
+      case BrowseScreenRequestType::MKDIR: {
+        bool success = sitelogic->finishRequest(request.id);
+        if (success) {
+          lastinfo = LastInfo::MKDIR_SUCCESS;
+          if (list.getPath() == request.path) {
+            refreshfilelistafter = true;
+          }
+        }
+        else {
+          lastinfo = LastInfo::MKDIR_FAILED;
+        }
+        lastinfotarget = request.files.front().first;
+        tickcount = 0;
+        break;
+      }
+      case BrowseScreenRequestType::DELETE: {
+        bool success = sitelogic->finishRequest(request.id);
+        if (success) {
+          lastinfo = LastInfo::DELETE_SUCCESS;
+          if (list.getPath() == request.path) {
+            refreshfilelistafter = true;
+          }
+        }
+        else {
+          lastinfo = LastInfo::DELETE_FAILED;
+        }
+        lastinfotarget = request.files.front().first;
+        tickcount = 0;
+        break;
+      }
+      case BrowseScreenRequestType::MOVE: {
+        bool success = sitelogic->finishRequest(request.id);
+        if (success) {
+          lastinfo = LastInfo::MOVE_SUCCESS;
+          if (list.getPath() == request.path) {
+            refreshfilelistafter = true;
+          }
+        }
+        else {
+          lastinfo = LastInfo::MOVE_FAILED;
+        }
+        lastinfotarget = request.files.front().first;
+        tickcount = 0;
+        break;
+      }
+      default:
+        assert(false);
+        break;
     }
-    else if (deleting) {
-      requestid = sitelogic->requestDelete(wipetarget, deletingrecursive, true);
+    requests.pop_front();
+  }
+  if (handled) {
+    if (requests.empty() && refreshfilelistafter) {
+      refreshfilelistafter = false;
+      refreshFileList();
+      parent->suggestOtherRefresh(this);
+    }
+    ui->redraw();
+    ui->setInfo();
+  }
+  return handled;
+}
+
+void BrowseScreenSite::loadFileListFromRequest() {
+  assert(!requests.empty());
+  const BrowseScreenRequest & request = requests.front();
+  FileListData * newfilelistdata = sitelogic->getFileListData(request.id);
+  if (newfilelistdata == nullptr) {
+    sitelogic->finishRequest(request.id);
+    lastinfo = LastInfo::CWD_FAILED;
+    lastinfotarget = request.path.toString();
+    tickcount = 0;
+    return;
+  }
+  cwdrawbuffer = newfilelistdata->getCwdRawBuffer();
+  filelist = newfilelistdata->getFileList();
+  if (list.isInitialized()) {
+    if (list.cursoredFile() != nullptr) {
+      selectionhistory.push_front(std::pair<Path, std::string>(list.getPath(), list.cursoredFile()->getName()));
+    }
+  }
+  else {
+    sitelogic->getAggregatedRawBuffer()->setUiWatching(false);
+  }
+  unsigned int position = 0;
+  bool separatorsenabled = false;
+  bool hasregexfilter = false;
+  std::list<std::string> wildcardfilters;
+  std::regex regexfilter;
+  std::string regexfilterstr;
+  std::set<std::string> comparefiles;
+  CompareMode comparemode = CompareMode::NONE;
+  if (list.getPath() == filelist->getPath()) {
+    position = list.currentCursorPosition();
+    separatorsenabled = list.separatorsEnabled();
+    hasregexfilter = list.hasRegexFilter();
+    if (hasregexfilter) {
+      regexfilter = list.getRegexFilter();
+      regexfilterstr = list.getRegexFilterString();
     }
     else {
-      global->getEventLog()->log("BrowseScreen", "WARNING: got a 'yes' answer for an unknown command");
+      wildcardfilters = list.getWildcardFilters();
+    }
+    comparemode = list.getCompareListMode();
+    comparefiles = list.getCompareList();
+  }
+  else {
+    currentviewspan = 0;
+    lastinfo = LastInfo::NONE;
+  }
+  list.parse(filelist);
+  sitelogic->finishRequest(request.id);
+  if (separatorsenabled) {
+    list.toggleSeparators();
+  }
+  if (hasregexfilter) {
+    list.setRegexFilter(regexfilter, regexfilterstr);
+  }
+  else if (wildcardfilters.size()) {
+    list.setWildcardFilters(wildcardfilters);
+  }
+  if (comparefiles.size()) {
+    list.setCompareList(comparefiles, comparemode);
+  }
+  list.sortMethod(sortmethod);
+  if (position) {
+    list.setCursorPosition(position);
+  }
+  const Path & path = list.getPath();
+  for (std::list<std::pair<Path, std::string> >::iterator it = selectionhistory.begin(); it != selectionhistory.end(); it++) {
+    if (it->first == path) {
+      list.selectFileName(it->second);
+      selectionhistory.erase(it);
+      break;
+    }
+  }
+  std::list<std::string> sections = site->getSectionsForPartialPath(path);
+  int dirlevels = path.split().size();
+  withinraceskiplistreach = false;
+  int closestsectiondirlevel = -1;
+  for (std::list<std::string>::iterator it = sections.begin(); it != sections.end(); it++) {
+    Path sectionpath = site->getSectionPath(*it);
+    int dirleveldifference = dirlevels - sectionpath.split().size();
+    if (dirleveldifference > 0) {
+      withinraceskiplistreach = true;
+      if (dirleveldifference < closestsectiondirlevel || closestsectiondirlevel < 0) {
+        closestsectiondirlevel = dirleveldifference;
+        closestracesectionpath = sectionpath;
+        closestracesection = *it;
+      }
+    }
+    else {
+      withinraceskiplistreach = false;
+      break;
+    }
+  }
+  //delete filelist;
+}
+
+void BrowseScreenSite::command(const std::string & command, const std::string & arg) {
+  if (command == "yes") {
+    switch (confirmaction) {
+      case ConfirmAction::WIPE:
+        for (const std::pair<std::string, bool>& file : list.getSelectedNames()) {
+          BrowseScreenRequest request;
+          request.id = sitelogic->requestWipe(ui, list.getPath() / file.first, file.second);
+          request.type = BrowseScreenRequestType::WIPE;
+          request.path = list.getPath();
+          request.files = { file };
+          requests.push_back(request);
+        }
+        break;
+      case ConfirmAction::DELETE:
+        for (const std::pair<std::string, bool>& file : list.getSelectedNames()) {
+          BrowseScreenRequest request;
+          request.id = sitelogic->requestDelete(ui, list.getPath() / file.first, file.second, true);
+          request.type = BrowseScreenRequestType::DELETE;
+          request.path = list.getPath();
+          request.files = { file };
+          requests.push_back(request);
+        }
+        break;
+      default:
+        assert(false);
+        break;
+    }
+    confirmaction = ConfirmAction::NONE;
+    ui->redraw();
+    ui->setInfo();
+  }
+  else if (command == "no") {
+    confirmaction = ConfirmAction::NONE;
+    ui->redraw();
+  }
+  else if (command == "makedir") {
+    BrowseScreenRequest request;
+    request.id = sitelogic->requestMakeDirectory(ui, list.getPath(), arg);
+    request.type = BrowseScreenRequestType::MKDIR;
+    request.path = list.getPath();
+    request.files = { std::pair<std::string, bool>(arg, true) };
+    requests.push_back(request);
+    ui->redraw();
+    ui->setInfo();
+  }
+  else if (command == "nuke") {
+    std::vector<std::string> args = util::splitVec(arg, ";");
+    int multiplier = std::stoi(args[0]);
+    std::string reason = args[1];
+    for (const std::pair<std::string, bool>& item : list.getSelectedDirectoryNames()) {
+      BrowseScreenRequest request;
+      request.id = sitelogic->requestNuke(ui, list.getPath() / item.first, multiplier, reason);
+      request.type = BrowseScreenRequestType::NUKE;
+      request.path = list.getPath();
+      request.files = { item };
+      requests.push_back(request);
     }
     ui->redraw();
     ui->setInfo();
-    return;
   }
-  else if (command == "no") {
-    wipe = false;
-    deleting = false;
-    ui->redraw();
-    return;
-  }
-  else if (command == "returnnuke") {
-    nuking = true;
-    requestid = util::str2Int(arg);
+  else if (command == "move") {
+    Path dstpath = arg;
+    for (const std::pair<std::string, bool>& item : list.getSelectedNames()) {
+      BrowseScreenRequest request;
+      request.id = sitelogic->requestMove(ui, list.getPath() / item.first, dstpath.isAbsolute() ? dstpath / item.first : list.getPath() / dstpath);
+      request.type = BrowseScreenRequestType::MOVE;
+      request.path = list.getPath();
+      request.files = { item };
+      requests.push_back(request);
+    }
     ui->redraw();
     ui->setInfo();
-    return;
   }
 }
 
 BrowseScreenAction BrowseScreenSite::keyPressed(unsigned int ch) {
+  int action = keybinds.getKeyAction(ch);
+  if (temphighlightline) {
+    temphighlightline = false;
+    ui->redraw();
+    if (action == KEYACTION_HIGHLIGHT_LINE) {
+      return BrowseScreenAction();
+    }
+  }
   bool update = false;
   bool success = false;
   unsigned int pagerows = (unsigned int) row * 0.6;
-  std::string oldpath;
-  unsigned int position;
+  Path oldpath;
   bool isdir;
   bool islink;
   UIFile * cursoredfile;
+  if (filtermodeinput || filtermodeinputregex || gotopathinput) {
+    if (bottomlinetextfield.inputChar(ch)) {
+      ui->update();
+      return BrowseScreenAction(BROWSESCREENACTION_CAUGHT);
+    }
+    else if (ch == 10) {
+      ui->hideCursor();
+      std::string text = bottomlinetextfield.getData();
+      if (text.length()) {
+        if (filtermodeinput) {
+          list.setWildcardFilters(util::trim(util::split(text)));
+        }
+        else if (filtermodeinputregex) {
+          try {
+            std::regex regexfilter = util::regexParse(text);
+            list.setRegexFilter(regexfilter, text);
+          }
+          catch (std::regex_error& e) {
+            ui->goInfo("Invalid regular expression.");
+            return BrowseScreenAction(BROWSESCREENACTION_CAUGHT);
+          }
+        }
+        else if (gotopathinput) {
+          gotoPath(text);
+          bottomlinetextfield.clear();
+        }
+        clearSoftSelects();
+        resort = true;
+      }
+      filtermodeinput = false;
+      filtermodeinputregex = false;
+      gotopathinput = false;
+      ui->redraw();
+      ui->setLegend();
+      return BrowseScreenAction(BROWSESCREENACTION_CAUGHT);
+    }
+    else if (ch == 27) {
+      if (!bottomlinetextfield.getData().empty()) {
+        bottomlinetextfield.clear();
+        ui->update();
+      }
+      else {
+        filtermodeinput = false;
+        filtermodeinputregex = false;
+        gotopathinput = false;
+        ui->hideCursor();
+        ui->redraw();
+        ui->setLegend();
+      }
+      return BrowseScreenAction(BROWSESCREENACTION_CAUGHT);
+    }
+    else if (ch == '\t') {
+      filtermodeinput = !filtermodeinput;
+      filtermodeinputregex = !filtermodeinputregex;
+      ui->update();
+      ui->setLegend();
+      return BrowseScreenAction(BROWSESCREENACTION_CAUGHT);
+    }
+  }
   if (gotomode) {
     if (gotomodefirst) {
       gotomodefirst = false;
@@ -391,6 +639,7 @@ BrowseScreenAction BrowseScreenSite::keyPressed(unsigned int ch) {
           }
           if (substr == gotomodestring) {
             list.setCursorPosition(i);
+            clearSoftSelects();
             break;
           }
         }
@@ -405,75 +654,92 @@ BrowseScreenAction BrowseScreenSite::keyPressed(unsigned int ch) {
       return BrowseScreenAction();
     }
   }
-  switch (ch) {
-    case 27: // esc
+  switch (action) {
+    case KEYACTION_BACK_CANCEL:
+      if (list.clearSelected()) {
+        ui->redraw();
+        break;
+      }
       ui->returnToLast();
       break;
-    case 'c':
+    case KEYACTION_CLOSE:
       return BrowseScreenAction(BROWSESCREENACTION_CLOSE);
-    case 'r':
-      //start a race of the selected dir, do nothing if a file is selected
-      if (list.cursoredFile() != NULL && list.cursoredFile()->isDirectory()) {
-        std::string dirname = list.cursoredFile()->getName();
-        if (!global->getSkipList()->isAllowed(dirname, true, false)) {
-          break;
+    case KEYACTION_SPREAD:
+    {
+      //start a spread job of the selected dir, do nothing if a file is selected
+      std::list<std::pair<std::string, bool> > items = list.getSelectedDirectoryNames();
+      if (items.empty()) {
+        ui->goInfo("Spread jobs are only applicable for directories. Please select one or more directories to start a spread job.");
+        break;
+      }
+      std::list<std::string> sections = site->getSectionsForPath(list.getPath());
+      if (sections.empty()) {
+        ui->goInfo("Cannot start a spread job here since no section is bound to this directory. Please bind a section to this directory first.");
+        break;
+      }
+      ui->goNewRace(site->getName(), sections, items);
+      break;
+    }
+    case KEYACTION_BIND_SECTION:
+      ui->goAddSiteSection(site, list.getPath());
+      break;
+    case KEYACTION_VIEW_FILE:
+      viewCursored();
+      break;
+    case KEYACTION_DOWNLOAD:
+    {
+      const std::list<UIFile *> items = list.getSelectedFiles();
+      for (std::list<UIFile *>::const_iterator it = items.begin(); it != items.end(); it++) {
+        UIFile * file = *it;
+        if (!file->isDirectory() && !file->getSize()) {
+          continue;
         }
-        std::list<std::string> sections = site->getSectionsForPath(list.getPath());
-        if (sections.size() > 0) {
-          std::string sectionstring;
-          for (std::list<std::string>::iterator it = sections.begin(); it != sections.end(); it++) {
-            sectionstring += *it + ";";
-          }
-          sectionstring = sectionstring.substr(0, sectionstring.length() - 1);
-          ui->goNewRace(site->getName(), sectionstring, dirname);
+        JobStartResult result = global->getEngine()->newTransferJobDownload(site->getName(), filelist, file->getName(),
+                                                                      global->getLocalStorage()->getDownloadPath());
+        if (result) {
+          ui->addTempLegendTransferJob(result.id);
         }
       }
       break;
-    case 'b':
-      ui->goAddSection(site->getName(), list.getPath());
-      break;
-    case 'v':
-      //view selected file, do nothing if a directory is selected
-      if (list.cursoredFile() != NULL && !list.cursoredFile()->isDirectory()) {
-        ui->goViewFile(site->getName(), list.cursoredFile()->getName(), filelist);
-      }
-      break;
-    case 'D':
-      if (list.cursoredFile()->isDirectory() || list.cursoredFile()->getSize() > 0) {
-        global->getEngine()->newTransferJobDownload(site->getName(), list.cursoredFile()->getName(),
-            filelist, global->getLocalStorage()->getDownloadPath());
-      }
-      break;
-    case 's':
-      sortmethod++;
+    }
+    case KEYACTION_SORT:
+      sortmethod = static_cast<UIFileList::SortMethod>((static_cast<int>(sortmethod) + 1) % 9);
       resort = true;
-      changedsort = true;
+      lastinfo = LastInfo::CHANGED_SORT;
+      lastinfotarget = list.getSortMethod(sortmethod);
       tickcount = 0;
       ui->redraw();
       ui->setInfo();
       break;
-    case 'S':
-      sortmethod = 0;
+    case KEYACTION_SORT_DEFAULT:
+      sortmethod = UIFileList::SortMethod::COMBINED;
       resort = true;
-      changedsort = true;
+      lastinfo = LastInfo::CHANGED_SORT;
+      lastinfotarget = list.getSortMethod(sortmethod);
       tickcount = 0;
       ui->redraw();
       ui->setInfo();
       break;
-    case 'P':
+    case KEYACTION_TOGGLE_SEPARATORS:
       resort = true;
       list.toggleSeparators();
       ui->redraw();
       break;
-    case 'n':
-      if (list.cursoredFile() != NULL && list.cursoredFile()->isDirectory()) {
-        tickcount = 0;
-        ui->goNuke(site->getName(), list.cursoredFile()->getName(), filelist);
-        nuketarget = list.cursoredFile()->getName();
+    case KEYACTION_NUKE:
+    {
+      std::list<std::pair<std::string, bool>> dirs = list.getSelectedDirectoryNames();
+      if (dirs.empty()) {
+        ui->goInfo("Please select directories for nuking.");
+        break;
       }
+      ui->goNuke(site->getName(), targetName(dirs), list.getPath());
       break;
-    case KEY_RIGHT:
-    case 10:
+    }
+    case KEYACTION_MKDIR:
+      ui->goMakeDir(site->getName(), list);
+      break;
+    case KEYACTION_RIGHT:
+    case KEYACTION_ENTER:
       cursoredfile = list.cursoredFile();
       if (cursoredfile == NULL) {
         break;
@@ -482,67 +748,56 @@ BrowseScreenAction BrowseScreenSite::keyPressed(unsigned int ch) {
       islink = cursoredfile->isLink();
       if (isdir || islink) {
         oldpath = list.getPath();
-        if (oldpath.length() > 1) {
-          oldpath += "/";
-        }
+        Path requestedpath;
         if (islink) {
-          std::string target = cursoredfile->getLinkTarget();
-          if (target.length() > 0 && target[0] == '/') {
+          Path target = cursoredfile->getLinkTarget();
+          if (target.isAbsolute()) {
             requestedpath = target;
           }
           else {
-            requestedpath = oldpath + target;
+            requestedpath = oldpath / target;
           }
         }
         else {
-          requestedpath = oldpath + cursoredfile->getName();
+          requestedpath = oldpath / cursoredfile->getName();
         }
-        requestid = sitelogic->requestFileList(requestedpath);
+        gotoPath(requestedpath);
         ui->update();
         ui->setInfo();
       }
-      break;
-    case 'W':
-      cursoredfile = list.cursoredFile();
-      if (cursoredfile == NULL) {
+      else {
+        viewCursored();
+      }
+      return BrowseScreenAction(BROWSESCREENACTION_CHDIR);
+    case KEYACTION_WIPE:
+    {
+      std::list<std::pair<std::string, bool> > filenames = list.getSelectedNames();
+      if (filenames.empty()) {
         break;
       }
-      tickcount = 0;
-      wipe = true;
-      wiperecursive = false;
-      if (cursoredfile->isDirectory()) {
-        wiperecursive = true;
+      confirmaction = ConfirmAction::WIPE;
+      std::string targettext = "these " + std::to_string(static_cast<int>(filenames.size())) + " items";
+      if (filenames.size() == 1) {
+        targettext = filenames.front().first;
       }
-      oldpath = list.getPath();
-      wipepath = oldpath;
-      if (oldpath.length() > 1) {
-        oldpath += "/";
-      }
-      wipefile = cursoredfile->getName();
-      wipetarget = oldpath + wipefile;
-      ui->goConfirmation("Do you really want to wipe " + wipefile);
+      ui->goConfirmation("Do you really want to wipe " + targettext);
       break;
-    case KEY_DC:
-      cursoredfile = list.cursoredFile();
-      if (cursoredfile == NULL) {
+    }
+    case KEYACTION_DELETE:
+    {
+      std::list<std::pair<std::string, bool> > filenames = list.getSelectedNames();
+      if (filenames.empty()) {
         break;
       }
-      tickcount = 0;
-      deleting = true;
-      deletingrecursive = false;
-      if (cursoredfile->isDirectory()) {
-        deletingrecursive = true;
+      confirmaction = ConfirmAction::DELETE;
+      std::string targettext = "these " + std::to_string(static_cast<int>(filenames.size())) + " items";
+      if (filenames.size() == 1) {
+        targettext = filenames.front().first;
       }
-      oldpath = list.getPath();
-      wipepath = oldpath;
-      if (oldpath.length() > 1) {
-        oldpath += "/";
-      }
-      wipefile = cursoredfile->getName();
-      wipetarget = oldpath + wipefile;
-      ui->goConfirmation("Do you really want to delete " + wipefile);
+      ui->goConfirmation("Do you really want to delete " + targettext);
       break;
-    case 'q':
+    }
+    case KEYACTION_QUICK_JUMP:
       gotomode = true;
       gotomodefirst = true;
       gotomodeticker = 0;
@@ -551,42 +806,61 @@ BrowseScreenAction BrowseScreenSite::keyPressed(unsigned int ch) {
       ui->update();
       ui->setLegend();
       break;
-    case KEY_LEFT:
-    case 8:
-    case 127:
-    case KEY_BACKSPACE:
-      oldpath = list.getPath();
-      if (oldpath == "") {
-        break;
+    case KEYACTION_FILTER:
+      if (list.hasWildcardFilters() || list.hasRegexFilter()) {
+        resort = true;
+        list.unsetFilters();
       }
-      if (oldpath == "/" ) {
+      else {
+        filtermodeinput = true;
+      }
+      ui->redraw();
+      ui->setLegend();
+      break;
+    case KEYACTION_FILTER_REGEX:
+      if (list.hasWildcardFilters() || list.hasRegexFilter()) {
+        resort = true;
+        list.unsetFilters();
+      }
+      else {
+        filtermodeinputregex = true;
+      }
+      ui->redraw();
+      ui->setLegend();
+      break;
+    case KEYACTION_GOTO_PATH:
+      gotopathinput = true;
+      bottomlinetextfield.clear();
+      ui->redraw();
+      ui->setLegend();
+      break;
+    case KEYACTION_COMMAND_LOG:
+      ui->goRawBuffer(&cwdrawbuffer, "CWD LOG: " + site->getName(), list.getPath().toString());
+      break;
+    case KEYACTION_LEFT:
+    case KEYACTION_RETURN:
+    {
+      oldpath = list.getPath();
+      if (oldpath == "/") {
         return BrowseScreenAction(BROWSESCREENACTION_CLOSE);
       }
-      position = oldpath.rfind("/");
-      if (position == 0) {
-        position = 1;
-      }
-      requestedpath = oldpath.substr(0, position);
-      requestid = sitelogic->requestFileList(requestedpath);
+      Path requestedpath = oldpath.cutLevels(1);
+      gotoPath(requestedpath);
       ui->setInfo();
       //go up one directory level, or return if at top already
-      break;
-    case KEY_F(5):
-      refreshFilelist();
+      return BrowseScreenAction(BROWSESCREENACTION_CHDIR);
+    }
+    case KEYACTION_REFRESH:
+      refreshFileList();
       ui->setInfo();
       break;
-    case KEY_DOWN:
-      //go down and highlight next item (if not at bottom already)
-      update = list.goNext();
-      if (list.currentCursorPosition() >= currentviewspan + row) {
-        ui->redraw();
-      }
-      else if (update) {
-        table.goDown();
+    case KEYACTION_DOWN:
+      if (!keyDown()) {
         ui->update();
       }
       break;
-    case KEY_UP:
+    case KEYACTION_UP:
+      clearSoftSelects();
       //go up and highlight previous item (if not at top already)
       update = list.goPrevious();
       if (list.currentCursorPosition() < currentviewspan) {
@@ -597,7 +871,8 @@ BrowseScreenAction BrowseScreenSite::keyPressed(unsigned int ch) {
         ui->update();
       }
       break;
-    case KEY_NPAGE:
+    case KEYACTION_NEXT_PAGE:
+      clearSoftSelects();
       for (unsigned int i = 0; i < pagerows; i++) {
         success = list.goNext();
         if (!success) {
@@ -612,7 +887,8 @@ BrowseScreenAction BrowseScreenSite::keyPressed(unsigned int ch) {
         ui->redraw();
       }
       break;
-    case KEY_PPAGE:
+    case KEYACTION_PREVIOUS_PAGE:
+      clearSoftSelects();
       for (unsigned int i = 0; i < pagerows; i++) {
         success = list.goPrevious();
         if (!success) {
@@ -627,7 +903,8 @@ BrowseScreenAction BrowseScreenSite::keyPressed(unsigned int ch) {
         ui->redraw();
       }
       break;
-    case KEY_HOME:
+    case KEYACTION_TOP:
+      clearSoftSelects();
       while (list.goPrevious()) {
         table.goUp();
         if (!update) {
@@ -638,7 +915,8 @@ BrowseScreenAction BrowseScreenSite::keyPressed(unsigned int ch) {
         ui->redraw();
       }
       break;
-    case KEY_END:
+    case KEYACTION_BOTTOM:
+      clearSoftSelects();
       while (list.goNext()) {
         table.goDown();
         if (!update) {
@@ -649,23 +927,123 @@ BrowseScreenAction BrowseScreenSite::keyPressed(unsigned int ch) {
         ui->redraw();
       }
       break;
-    case 'w':
-      if (list.cursoredFile() != NULL) {
-        ui->goRawCommand(site->getName(), list.cursoredFile()->getName());
+    case KEYACTION_SELECT_ALL:
+    {
+      const std::vector<UIFile *> * uilist = list.getSortedList();
+      for (unsigned int i = 0; i < uilist->size(); i++) {
+        (*uilist)[i]->softSelect();
+      }
+      softselecting = true;
+      ui->redraw();
+      break;
+    }
+    case KEYACTION_SOFT_SELECT_UP:
+      if (list.cursoredFile() != nullptr) {
+        UIFile * lastfile = list.cursoredFile();
+        if (!list.goPrevious()) {
+          break;
+        }
+        UIFile * file = list.cursoredFile();
+        if (file->isSoftSelected()) {
+          file->unSoftSelect();
+        }
+        else {
+          lastfile->softSelect();
+          softselecting = true;
+        }
+        table.goUp();
+        ui->redraw();
+      }
+      break;
+    case KEYACTION_SOFT_SELECT_DOWN:
+      if (list.cursoredFile() != nullptr) {
+        UIFile * lastfile = list.cursoredFile();
+        if (!list.goNext()) {
+          break;
+        }
+        UIFile * file = list.cursoredFile();
+        if (file->isSoftSelected()) {
+          file->unSoftSelect();
+        }
+        else {
+          lastfile->softSelect();
+          softselecting = true;
+        }
+        table.goDown();
+        ui->redraw();
+      }
+      break;
+    case KEYACTION_HARD_SELECT:
+      if (softselecting) {
+        list.hardFlipSoftSelected();
+        softselecting = false;
+        if (list.cursoredFile()->isHardSelected()) {
+          list.cursoredFile()->unHardSelect();
+        }
+        else {
+          list.cursoredFile()->hardSelect();
+        }
+        if (!keyDown()) {
+          ui->redraw();
+        }
+      }
+      else if (list.cursoredFile() != nullptr) {
+        if (list.cursoredFile()->isHardSelected()) {
+          list.cursoredFile()->unHardSelect();
+        }
+        else {
+          list.cursoredFile()->hardSelect();
+        }
+        if (!keyDown()) {
+          ui->update();
+        }
+      }
+      break;
+    case KEYACTION_RAW_COMMAND:
+      if (list.cursoredFile() != nullptr) {
+        ui->goRawCommand(site->getName(), list.getPath(), list.cursoredFile()->getName());
       }
       else {
-        ui->goRawCommand(site->getName());
+        ui->goRawCommand(site->getName(), list.getPath());
       }
+      break;
+    case KEYACTION_HIGHLIGHT_LINE:
+      if (list.cursoredFile() == nullptr) {
+        break;
+      }
+      temphighlightline = true;
+      ui->redraw();
+      break;
+    case KEYACTION_INFO:
+      if (list.cursoredFile() != nullptr) {
+        ui->goFileInfo(list.cursoredFile());
+      }
+      break;
+    case KEYACTION_TOGGLE_SHOW_NAMES_ONLY:
+      nameonly = !nameonly;
+      ui->redraw();
+      break;
+    case KEYACTION_EDIT_SECTIONS:
+      ui->goSiteSections(site);
       break;
   }
   return BrowseScreenAction();
 }
 
-std::string BrowseScreenSite::getLegendText() const {
+std::string BrowseScreenSite::getLegendText(int scope) const {
   if (gotomode) {
     return "[Any] Go to first matching entry name - [Esc] Cancel";
   }
-  return "[Esc] Cancel - [c]lose - [Up/Down] Navigate - [Enter/Right] open dir - [Backspace/Left] return - [r]ace - [v]iew file - [D]ownload - [b]ind to section - [s]ort - ra[w] command - [W]ipe - [Del]ete - [n]uke - Toggle se[P]arators - [q]uick jump";
+  if (filtermodeinput) {
+    return "[Any] Enter space separated filters. Valid operators are !, *, ?. Must match all negative filters and at least one positive if given. Case insensitive. - [Tab] switch mode - [Esc] Cancel";
+  }
+  if (filtermodeinputregex) {
+    return "[Any] Enter regex input - [Tab] switch mode - [Esc] Cancel";
+  }
+  if (gotopathinput) {
+    return "[Any] Enter path to go to - [Esc] Cancel";
+  }
+  return keybinds.getLegendSummary(scope);
 }
 
 std::string BrowseScreenSite::getInfoLabel() const {
@@ -673,19 +1051,35 @@ std::string BrowseScreenSite::getInfoLabel() const {
 }
 
 std::string BrowseScreenSite::getInfoText() const {
-  std::string text = list.getPath();
-  if (requestid >= 0) {
-    if (wipe) {
-      text = "Wiping " + wipetarget + "  ";
+  std::string text = list.getPath().toString();
+  if (!requests.empty()) {
+    const BrowseScreenRequest & request = requests.front();
+    std::string target = targetName(request.files);
+    if (requests.size() > 1) {
+      target += " (+" + std::to_string(requests.size() - 1) + " more)";
     }
-    else if (deleting) {
-      text = "Deleting " + wipetarget + "  ";
-    }
-    else if (nuking) {
-      text = "Nuking " + wipetarget + "  ";
-    }
-    else {
-      text = "Getting list for " + requestedpath + "  ";
+    switch (request.type) {
+      case BrowseScreenRequestType::WIPE:
+        text = "Wiping " + target + "  ";
+        break;
+      case BrowseScreenRequestType::DELETE:
+        text = "Deleting " + target + "  ";
+        break;
+      case BrowseScreenRequestType::NUKE:
+        text = "Nuking " + target + "  ";
+        break;
+      case BrowseScreenRequestType::MKDIR:
+        text = "Making directory " + target + "  ";
+        break;
+      case BrowseScreenRequestType::FILELIST:
+        text = "Getting list for " + request.path.toString() + "  ";
+        break;
+      case BrowseScreenRequestType::MOVE:
+        text = "Moving/renaming " + target + "  ";
+        break;
+      default:
+        assert(false);
+        break;
     }
     switch(spinnerpos++ % 4) {
       case 0:
@@ -703,93 +1097,89 @@ std::string BrowseScreenSite::getInfoText() const {
     }
     return text;
   }
-  if (wipesuccess) {
-    if (tickcount++ < 8) {
-      text = "Wipe successful: " + wipetarget;
-      return text;
+  if (tickcount++ < 8 && lastinfo != LastInfo::NONE) {
+    switch (lastinfo) {
+      case LastInfo::CHANGED_SORT:
+        text = "Sort method: ";
+        break;
+      case LastInfo::CWD_FAILED:
+        text = "Getting file list failed: ";
+        break;
+      case LastInfo::DELETE_SUCCESS:
+        text = "Delete successful: ";
+        break;
+      case LastInfo::DELETE_FAILED:
+        text = "Delete failed: ";
+        break;
+      case LastInfo::WIPE_SUCCESS:
+        text = "Wipe successful: ";
+        break;
+      case LastInfo::WIPE_FAILED:
+        text = "Wipe failed: ";
+        break;
+      case LastInfo::MKDIR_SUCCESS:
+        text = "Directory created: ";
+        break;
+      case LastInfo::MKDIR_FAILED:
+        text = "Directory creation failed: ";
+        break;
+      case LastInfo::NUKE_SUCCESS:
+        text = "Nuke successful: ";
+        break;
+      case LastInfo::NUKE_FAILED:
+        text = "Nuke failed: ";
+        break;
+      case LastInfo::MOVE_SUCCESS:
+        text = "Move/rename successful: ";
+        break;
+      case LastInfo::MOVE_FAILED:
+        text = "Move/rename failed: ";
+        break;
+      case LastInfo::NONE:
+        break;
     }
-    else {
-      wipesuccess = false;
-    }
+    return text + lastinfotarget;
   }
-  else if (wipefailed) {
-    if (tickcount++ < 8) {
-      text = "Wipe failed: " + wipetarget;
-      return text;
+  if (list.hasWildcardFilters() || list.hasRegexFilter() || list.getCompareListMode() != CompareMode::NONE) {
+    if (list.hasWildcardFilters()) {
+      text += "  FILTER: " + util::join(list.getWildcardFilters());
     }
-    else {
-      wipefailed = false;
+    else if (list.hasRegexFilter()) {
+      text += "  REGEX FILTER: " + list.getRegexFilterString();
     }
+    if (list.getCompareListMode() == CompareMode::UNIQUE) {
+      text += "  UNIQUES";
+    }
+    else if (list.getCompareListMode() == CompareMode::IDENTICAL) {
+      text += "  IDENTICALS";
+    }
+    text += "  " + std::to_string(list.filteredSizeFiles()) + "/" + std::to_string(list.sizeFiles()) + "f " +
+        std::to_string(list.filteredSizeDirs()) + "/" + std::to_string(list.sizeDirs()) + "d";
+    text += std::string("  ") + util::parseSize(list.getFilteredTotalSize()) + "/" +
+        util::parseSize(list.getTotalSize());
   }
-  else if (cwdfailed) {
-    if (tickcount++ < 8) {
-      text = "CWD failed: " + requestedpath;
-      return text;
-    }
-    else {
-      cwdfailed = false;
-    }
+  else {
+    text += "  " + std::to_string(list.sizeFiles()) + "f " + std::to_string(list.sizeDirs()) + "d";
+    text += std::string("  ") + util::parseSize(list.getTotalSize());
   }
-  else if (deletesuccess) {
-    if (tickcount++ < 8) {
-      text = "Delete successful: " + wipetarget;
-      return text;
-    }
-    else {
-      deletesuccess = false;
-    }
-  }
-  else if (deletefailed) {
-    if (tickcount++ < 8) {
-      text = "Delete failed: " + wipetarget;
-      return text;
-    }
-    else {
-      deletefailed = false;
-    }
-  }
-  else if (nukesuccess) {
-    if (tickcount++ < 8) {
-      text = "Nuke successful: " + nuketarget;
-      return text;
-    }
-    else {
-      nukesuccess = false;
-    }
-  }
-  else if (nukefailed) {
-    if (tickcount++ < 8) {
-      text = "Nuke failed: " + nuketarget;
-      return text;
-    }
-    else {
-      nukefailed = false;
-    }
-  }
-  else if (changedsort) {
-    if (tickcount++ < 8) {
-      text = "Sort method: " + list.getSortMethod();
-      return text;
-    }
-    else {
-      changedsort = false;
-    }
-  }
-  text += "  " + util::int2Str(list.sizeFiles()) + "f " + util::int2Str(list.sizeDirs()) + "d";
-  text += std::string("  ") + util::parseSize(list.getTotalSize());
   return text;
 }
 
 void BrowseScreenSite::setFocus(bool focus) {
   this->focus = focus;
-  disableGotoMode();
+  if (!focus) {
+    disableGotoMode();
+    filtermodeinput = false;
+    filtermodeinputregex = false;
+    gotopathinput = false;
+  }
 }
 
 std::string BrowseScreenSite::siteName() const {
   return site->getName();
 }
 
-FileList * BrowseScreenSite::fileList() const {
+std::shared_ptr<FileList> BrowseScreenSite::fileList() const {
   return filelist;
 }
 
@@ -797,42 +1187,27 @@ UIFile * BrowseScreenSite::selectedFile() const {
   return list.cursoredFile();
 }
 
-void BrowseScreenSite::sort() {
-  switch (sortmethod % 9) {
-    case 0:
-      list.sortCombined();
-      break;
-    case 1:
-      list.sortName(true);
-      break;
-    case 2:
-      list.sortName(false);
-      break;
-    case 3:
-      list.sortSize(false);
-      break;
-    case 4:
-      list.sortSize(true);
-      break;
-    case 5:
-      list.sortTime(false);
-      break;
-    case 6:
-      list.sortTime(true);
-      break;
-    case 7:
-      list.sortOwner(true);
-      break;
-    case 8:
-      list.sortOwner(false);
-      break;
-  }
-  resort = false;
+void BrowseScreenSite::refreshFileList() {
+  gotoPath(list.getPath());
 }
 
-void BrowseScreenSite::refreshFilelist() {
-  requestedpath = list.getPath();
-  requestid = sitelogic->requestFileList(requestedpath);
+BrowseScreenAction BrowseScreenSite::tryJumpSection(const std::string& section) {
+  if (site->hasSection(section)) {
+    Path path = site->getSectionPath(section);
+    gotoPath(path);
+    lastjumpsection = section;
+    lastjumppath = path;
+    return BrowseScreenAction(BROWSESCREENACTION_CHDIR);
+  }
+  return BrowseScreenAction(BROWSESCREENACTION_NOOP);
+}
+
+std::string BrowseScreenSite::getLastJumpSection() const {
+  return lastjumpsection;
+}
+
+Path BrowseScreenSite::getLastJumpPath() const {
+  return lastjumppath;
 }
 
 void BrowseScreenSite::tick(int) {
@@ -843,52 +1218,68 @@ void BrowseScreenSite::tick(int) {
   }
 }
 
-size_t BrowseScreenSite::countDirLevels(std::string path) {
-  if (path.length() == 0) {
-    path = "/";
-  }
-  bool endswithslash = path.rfind("/") + 1 == path.length();
-  if (endswithslash && path.length() > 1) {
-    path = path.substr(0, path.length() - 1);
-  }
-  return std::count(path.begin(), path.end(), '/');
-}
-
-void BrowseScreenSite::addFileDetails(unsigned int y, std::string name) {
-  addFileDetails(y, "", name, "", "", "", false, false);
-}
-
-void BrowseScreenSite::addFileDetails(unsigned int y, std::string prepchar, std::string name, std::string size, std::string lastmodified, std::string owner, bool selectable, bool selected) {
-  Pointer<MenuSelectAdjustableLine> msal = table.addAdjustableLine();
-  Pointer<MenuSelectOptionTextButton> msotb;
-  msotb = table.addTextButtonNoContent(y, coloffset + 1, "prepchar", prepchar);
-  msotb->setSelectable(false);
-  msotb->setShortSpacing();
-  msal->addElement(msotb, 4, RESIZE_REMOVE);
-  msotb = table.addTextButtonNoContent(y, coloffset + 3, "name", name);
-  if (!selectable) {
-    msotb->setSelectable(false);
-  }
-  if (selected) {
-    table.setPointer(msotb);
-  }
-  msal->addElement(msotb, 5, RESIZE_WITHDOTS, true);
-  msotb = table.addTextButtonNoContent(y, coloffset + 3, "size", size);
-  msotb->setSelectable(false);
-  msotb->setRightAligned();
-  msal->addElement(msotb, 3, RESIZE_REMOVE);
-  msotb = table.addTextButtonNoContent(y, coloffset + 3, "lastmodified", lastmodified);
-  msotb->setSelectable(false);
-  msal->addElement(msotb, 2, RESIZE_REMOVE);
-  msotb = table.addTextButtonNoContent(y, coloffset + 3, "owner", owner);
-  msotb->setSelectable(false);
-  msal->addElement(msotb, 1, RESIZE_REMOVE);
-}
-
 void BrowseScreenSite::disableGotoMode() {
   if (gotomode) {
     gotomode = false;
     global->getTickPoke()->stopPoke(this, 0);
     ui->setLegend();
+  }
+}
+
+void BrowseScreenSite::clearSoftSelects() {
+  if (softselecting) {
+    list.clearSoftSelected();
+    ui->redraw();
+    softselecting = false;
+  }
+}
+
+UIFileList * BrowseScreenSite::getUIFileList() {
+  return &list;
+}
+
+const std::shared_ptr<Site> & BrowseScreenSite::getSite() const {
+  return site;
+}
+
+void BrowseScreenSite::viewCursored() {
+  //view selected file, do nothing if a directory is selected
+  if (list.cursoredFile() != NULL) {
+    if (list.cursoredFile()->isDirectory()) {
+      ui->goInfo("Cannot use the file viewer on a directory.");
+    }
+    else {
+      ui->goViewFile(site->getName(), list.cursoredFile()->getName(), filelist);
+    }
+  }
+}
+
+bool BrowseScreenSite::keyDown() {
+  clearSoftSelects();
+  //go down and highlight next item (if not at bottom already)
+  bool update = list.goNext();
+  if (list.currentCursorPosition() >= currentviewspan + row) {
+    ui->redraw();
+    return true;
+  }
+  else if (update) {
+    table.goDown();
+  }
+  return false;
+}
+
+void BrowseScreenSite::gotoPath(const Path & path) {
+  Path abspath = path.isRelative() ? list.getPath() / path : path;
+  BrowseScreenRequest request;
+  request.id = sitelogic->requestFileList(ui, abspath);
+  request.type = BrowseScreenRequestType::FILELIST;
+  request.path = abspath;
+  requests.push_back(request);
+}
+
+void BrowseScreenSite::initiateMove(const std::string& dstpath) {
+  std::list<std::pair<std::string, bool>> items = list.getSelectedNames();
+  if (!items.empty()) {
+    ui->goMove(targetName(items), list.getPath(), dstpath, items.front().first, site->getName());
   }
 }

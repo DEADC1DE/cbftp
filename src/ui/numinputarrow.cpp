@@ -1,7 +1,5 @@
 #include "numinputarrow.h"
 
-#include "../util.h"
-
 NumInputArrow::NumInputArrow() {
 
 }
@@ -49,15 +47,28 @@ void NumInputArrow::activate() {
 void NumInputArrow::deactivate() {
   active = false;
 }
+
+bool NumInputArrow::isActive() const {
+  return active;
+}
+
 std::string NumInputArrow::getVisual() const {
-  int maxlen = util::int2Str(max).length() + 4;
-  std::string out = "";
+  unsigned int maxlen = std::to_string(max).length();
+  for (const std::pair<const int, std::string> & substitute : substituteTexts) {
+    if (substitute.second.length() > maxlen) {
+      maxlen = substitute.second.length();
+    }
+  }
+  maxlen += 4;
+  std::map<int, std::string>::const_iterator it = substituteTexts.find(val);
+  std::string out = it != substituteTexts.end() ? it->second : std::to_string(val);
   if (active) {
-    out = "< " + util::int2Str(val) + " >";
+    out = "< " + out + " >";
   }
-  else {
-    out = util::int2Str(val);
-  }
-  while ((int) out.length() < maxlen) out += ' ';
+  while (out.length() < maxlen) out += ' ';
   return out;
+}
+
+void NumInputArrow::setSubstituteText(int value, const std::string & text) {
+  substituteTexts[value] = text;
 }

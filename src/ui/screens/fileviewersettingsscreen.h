@@ -4,7 +4,6 @@
 #include "../menuselectoption.h"
 
 class MenuSelectOptionTextArrow;
-class ExternalFileViewing;
 class LocalStorage;
 
 class FileViewerSettingsScreen : public UIWindow {
@@ -12,17 +11,10 @@ public:
   FileViewerSettingsScreen(Ui *);
   ~FileViewerSettingsScreen();
   void initialize(unsigned int, unsigned int);
-  void update();
-  void redraw();
-  bool keyPressed(unsigned int);
-  std::string getLegendText() const;
-  std::string getInfoLabel() const;
+  void redraw() override;
+  bool keyPressed(unsigned int) override;
+  std::string getInfoLabel() const override;
 private:
-  std::string currentlegendtext;
-  std::string defaultlegendtext;
-  bool active;
-  Pointer<MenuSelectOptionElement> activeelement;
   MenuSelectOption mso;
-  ExternalFileViewing * efv;
   LocalStorage * ls;
 };

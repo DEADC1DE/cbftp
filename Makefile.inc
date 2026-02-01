@@ -4,32 +4,85 @@
 # relative path to the ui to use
 UI_PATH := src/ui
 
-ifneq ($(STATIC_SSL_PATH),)
-STATIC_SSL_INCLUDE := -I$(STATIC_SSL_PATH)/include
-STATIC_SSL_LINK := $(STATIC_SSL_PATH)/libssl.a $(STATIC_SSL_PATH)/libcrypto.a
-SSL_LINKFLAGS := $(STATIC_SSL_LINK) -ldl
+# path where the data file will be stored
+DATA_FILE := "\"~/.cbftp/data\""
+
+UNAME_S := $(shell uname -s)
+
+ifeq ($(UNAME_S),Darwin)
+  ifndef STATIC_SSL_PATH
+    HOMEBREW_SSL_PATH := $(shell find /opt/homebrew/Cellar -name libssl.a | xargs dirname | xargs dirname | tail -n 1)
+    ifneq ($(HOMEBREW_SSL_PATH),)
+      STATIC_SSL_PATH := $(HOMEBREW_SSL_PATH)
+      STATIC_SSL_LINK := $(STATIC_SSL_PATH)/lib/libssl.a $(STATIC_SSL_PATH)/lib/libcrypto.a
+    else
+      $(error Could not find any OpenSSL installed in /opt/homebrew/Cellar. Please specify your path to OpenSSL by editing STATIC_SSL_PATH in Makefile.inc)
+    endif
+  endif
+endif
+
+ifdef STATIC_SSL_PATH
+  STATIC_SSL_INCLUDE := -I$(STATIC_SSL_PATH)/include
+  ifndef STATIC_SSL_LINK
+    STATIC_SSL_LINK := $(STATIC_SSL_PATH)/libssl.a $(STATIC_SSL_PATH)/libcrypto.a
+  endif
+  SSL_LINKFLAGS := $(STATIC_SSL_LINK) -ldl
 else
-SSL_LINKFLAGS := -lssl -lcrypto
+  SSL_LINKFLAGS := -lssl -lcrypto
 endif
 
 ROOT_DIR:=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 
-HAS_SVN := ${shell svn info $(ROOT_DIR) > /dev/null 2>&1; echo $$?}
-REDIST_VERSION := ${shell cat $(ROOT_DIR)/.version 2>/dev/null}
+HAS_SVN := $(shell svn info $(ROOT_DIR) > /dev/null 2>&1; echo $$?)
+REDIST_VERSION := $(shell cat $(ROOT_DIR)/.version 2>/dev/null)
 
 ifeq ($(HAS_SVN), 0)
-VERSION := "\"svn:r${shell svn info $(ROOT_DIR)|grep Revision|awk '{ print $$2 }'}\""
+VERSION := "\"svn:r$(shell svn info $(ROOT_DIR)|grep Revision|awk '{ print $$2 }')\""
+SVN_ROOT_DIR := $(shell svn info $(ROOT_DIR)|grep 'Working Copy Root'|awk '{print $$5 }')
 else ifneq ($(REDIST_VERSION),)
 VERSION := "\"redist:r$(REDIST_VERSION)\""
 else
 VERSION := "\"unknown\""
 endif
 
-DATE := "\"${shell date}\""
+DATE := "\"$(shell date)\""
 
 BOXTAG := "\"cbftp\""
 
-CXX=g++
-OPTFLAGS=-g -O0
-CPPFLAGS=$(OPTFLAGS) -Wall -MMD -MP $(STATIC_SSL_INCLUDE)
-LINKFLAGS=$(SSL_LINKFLAGS) -lncursesw -lpthread
+CXX ?= g++
+ifndef OPTFLAGS
+OPTFLAGS = -g -O0
+else
+$(info Using OPTFLAGS provided by shell)
+endif
+ifndef CXXFLAGS
+CXXFLAGS = $(OPTFLAGS) -std=c++11 -Wall -MMD -MP
+ifdef STATIC_SSL_INCLUDE
+CXXFLAGS += $(STATIC_SSL_INCLUDE)
+endif
+else
+$(info Using CXXFLAGS provided by shell)
+endif
+ifndef CFLAGS
+CFLAGS = $(OPTFLAGS) -Wall -MMD -MP
+AR ?= ar
+RANLIB ?= ranlib
+else
+$(info Using CFLAGS provided by shell)
+endif
+ifndef LINKFLAGS
+  LINKFLAGS=$(SSL_LINKFLAGS) -lpthread
+  ifneq ($(wildcard /etc/debian_version),)
+    DEBIAN=1
+  endif
+  ifneq ($(filter $(UNAME_S),FreeBSD),)
+    FREEBSD=1
+  endif
+  ifneq ($(DEBIAN)$(FREEBSD),)
+    LINKFLAGS+=-lncursesw
+  else
+    LINKFLAGS+=-lncurses
+  endif
+else
+  $(info Using LINKFLAGS provided by shell)
+endif

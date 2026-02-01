@@ -1,34 +1,42 @@
 #pragma once
 
-#include <string>
 #include <list>
+#include <memory>
+#include <string>
 
-#include "core/pointer.h"
 #include "core/eventreceiver.h"
 
-class DataFileHandler;
+#include "datafilehandler.h"
+
+class SkipList;
 
 class SettingsAdder {
 public:
   virtual ~SettingsAdder() {
   }
-  virtual void loadSettings(Pointer<DataFileHandler>) = 0;
-  virtual void saveSettings(Pointer<DataFileHandler>) = 0;
+  virtual void loadSettings(std::shared_ptr<DataFileHandler>) = 0;
+  virtual void saveSettings(std::shared_ptr<DataFileHandler>) = 0;
 };
 
-class SettingsLoaderSaver : public EventReceiver {
+class SettingsLoaderSaver : public Core::EventReceiver {
 public:
   SettingsLoaderSaver();
-  bool enterKey(const std::string &);
+  DataFileState getState() const;
+  bool tryDecrypt(const std::string& key);
+  void init();
   void saveSettings();
-  bool dataExists() const;
-  bool changeKey(const std::string &, const std::string &);
+  bool changeKey(const std::string& key, const std::string& newkey);
+  bool setEncrypted(const std::string& key);
+  bool setPlain(const std::string& key);
   void tick(int);
   void addSettingsAdder(SettingsAdder *);
   void removeSettingsAdder(SettingsAdder *);
+  static void addSkipList(const std::shared_ptr<DataFileHandler>& dfh, const SkipList* skiplist, const std::string& owner, const std::string&);
+  static void loadSkipListEntry(SkipList* skiplist, std::string value);
 private:
   void loadSettings();
   void startAutoSaver();
-  Pointer<DataFileHandler> dfh;
+  std::shared_ptr<DataFileHandler> dfh;
   std::list<SettingsAdder *> settingsadders;
+  bool loaded;
 };

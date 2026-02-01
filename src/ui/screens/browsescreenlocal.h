@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <string>
 #include <list>
 #include <utility>
@@ -8,35 +9,44 @@
 
 #include "../menuselectoption.h"
 #include "../uifilelist.h"
+#include "../menuselectoptiontextfield.h"
 
-#include "../../core/pointer.h"
+#include "../../localstorage.h"
+#include "../../path.h"
 
 class Ui;
+class VirtualView;
 class LocalFileList;
+class KeyBinds;
 
 class BrowseScreenLocal : public BrowseScreenSub {
 public:
-  BrowseScreenLocal(Ui *);
+  BrowseScreenLocal(Ui *, KeyBinds& keybinds, const Path& path = Path());
   ~BrowseScreenLocal();
-  BrowseScreenType type() const;
-  void redraw(unsigned int, unsigned int, unsigned int);
-  void update();
-  void command(std::string, std::string);
-  BrowseScreenAction keyPressed(unsigned int);
-  std::string getLegendText() const;
-  std::string getInfoLabel() const;
-  std::string getInfoText() const;
-  void setFocus(bool);
-  void tick(int);
-  Pointer<LocalFileList> fileList() const;
+  BrowseScreenType type() const override;
+  void redraw(unsigned int, unsigned int, unsigned int) override;
+  void update() override;
+  void command(const std::string &, const std::string &) override;
+  BrowseScreenAction keyPressed(unsigned int) override;
+  std::string getLegendText(int scope) const override;
+  std::string getInfoLabel() const override;
+  std::string getInfoText() const override;
+  void setFocus(bool) override;
+  void tick(int) override;
+  std::shared_ptr<LocalFileList> fileList() const;
   UIFile * selectedFile() const;
+  UIFileList * getUIFileList() override;
+  void initiateMove(const std::string& dstpath) override;
 private:
-  void addFileDetails(unsigned int, std::string);
-  void addFileDetails(unsigned int, std::string, std::string, std::string, std::string, std::string, bool, bool);
+  void refreshFilelist();
+  bool handleReadyRequests();
   void disableGotoMode();
-  void sort();
-  void gotoPath(const std::string &);
-  Ui * ui;
+  void gotoPath(int requestid, const Path & path);
+  void clearSoftSelects();
+  void viewCursored();
+  bool keyDown();
+  Ui* ui;
+  VirtualView* vv;
   unsigned int row;
   unsigned int col;
   unsigned int coloffset;
@@ -44,16 +54,26 @@ private:
   bool focus;
   MenuSelectOption table;
   UIFileList list;
-  mutable bool changedsort;
-  mutable bool cwdfailed;
+  std::list<BrowseScreenRequest> requests;
+  mutable int spinnerpos;
   mutable int tickcount;
   bool resort;
-  int sortmethod;
+  UIFileList::SortMethod sortmethod;
   bool gotomode;
   bool gotomodefirst;
   int gotomodeticker;
+  bool filtermodeinput;
+  bool filtermodeinputregex;
+  bool gotopathinput;
   std::string gotomodestring;
-  std::list<std::pair<std::string, std::string> > selectionhistory;
-  Pointer<LocalFileList> filelist;
-  std::string targetpath;
+  std::list<std::pair<Path, std::string> > selectionhistory;
+  std::shared_ptr<LocalFileList> filelist;
+  MenuSelectOptionTextField bottomlinetextfield;
+  bool temphighlightline;
+  bool softselecting;
+  LastInfo lastinfo;
+  std::string lastinfotarget;
+  bool refreshfilelistafter;
+  unsigned long long int freespace;
+  bool nameonly;
 };

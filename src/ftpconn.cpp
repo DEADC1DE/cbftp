@@ -1,7 +1,7 @@
 #include "ftpconn.h"
 
-#include <stdlib.h>
-
+#include <cassert>
+#include <cstdlib>
 #include <cstring>
 #include <cctype>
 #include <cerrno>
@@ -21,28 +21,68 @@
 #include "proxymanager.h"
 #include "util.h"
 
-extern GlobalContext * global;
-
 #define FTPCONN_TICK_INTERVAL 1000
 
-FTPConn::FTPConn(SiteLogic * sl, int id) {
-  this->sl = sl;
-  this->id = id;
-  this->site = sl->getSite();
-  this->status = "disconnected";
-  nextconnectorid = 0;
-  processing = false;
-  rawbuf = new RawBuffer(RAWBUFMAXLEN, site->getName(), util::int2Str(id));
-  aggregatedrawbuf = sl->getAggregatedRawBuffer();
-  iom = global->getIOManager();
-  databuflen = DATABUF;
-  databuf = (char *) malloc(databuflen);
-  databufpos = 0;
-  protectedmode = PROT_UNSET;
-  sscnmode = false;
-  mkdtarget = false;
-  currentpath = "/";
-  state = STATE_DISCONNECTED;
+const char * xdupematch = "X-DUPE: ";
+const char * dupematch1 = "uploaded by";
+const char * dupematch2 = "ile exists";
+const size_t xdupematchlen = strlen(xdupematch);
+
+void fromPASVString(std::string pasv, std::string & host, int & port) {
+  size_t sep1 = pasv.find(",");
+  size_t sep2 = pasv.find(",", sep1 + 1);
+  size_t sep3 = pasv.find(",", sep2 + 1);
+  size_t sep4 = pasv.find(",", sep3 + 1);
+  size_t sep5 = pasv.find(",", sep4 + 1);
+  pasv[sep1] = '.';
+  pasv[sep2] = '.';
+  pasv[sep3] = '.';
+  host = pasv.substr(0, sep4);
+  int major = std::stoi(pasv.substr(sep4 + 1, sep5 - sep4 + 1));
+  int minor = std::stoi(pasv.substr(sep5 + 1));
+  port = major * 256 + minor;
+}
+
+std::string toPASVString(const std::string & addr, int port) {
+  std::string pasv = addr;
+  size_t pos;
+  while ((pos = pasv.find(".")) != std::string::npos) {
+    pasv[pos] = ',';
+  }
+  int portfirst = port / 256;
+  int portsecond = port % 256;
+  return pasv + "," + std::to_string(portfirst) + "," + std::to_string(portsecond);
+}
+
+FTPConn::FTPConn(SiteLogic * sl, int id) :
+  nextconnectorid(0),
+  iom(global->getIOManager()),
+  databuflen(DATA_BUF_SIZE),
+  databuf((char *) malloc(databuflen)),
+  databufpos(0),
+  id(id),
+  processing(false),
+  allconnectattempted(false),
+  sl(sl),
+  status("disconnected"),
+  site(sl->getSite()),
+  sockid(-1),
+  state(FTPConnState::DISCONNECTED),
+  aborted(false),
+  currentfl(NULL),
+  currentco(NULL),
+  currentpath("/"),
+  protectedmode(ProtMode::UNSET),
+  sscnmode(false),
+  ceprenabled(false),
+  mkdtarget(false),
+  rawbuf(new RawBuffer(site->getName(), std::to_string(id))),
+  aggregatedrawbuf(sl->getAggregatedRawBuffer()),
+  cwdrawbuf(new RawBuffer(site->getName())),
+  xduperun(false),
+  typeirun(false),
+  cleanlyclosed(false) {
+
 }
 
 FTPConn::~FTPConn() {
@@ -69,34 +109,41 @@ std::string FTPConn::getStatus() const {
 }
 
 void FTPConn::login() {
-  if (state != STATE_DISCONNECTED) {
+  if (state != FTPConnState::DISCONNECTED && state != FTPConnState::QUIT) {
     return;
   }
-  protectedmode = PROT_UNSET;
+  protectedmode = ProtMode::UNSET;
   sscnmode = false;
+  ceprenabled = false;
   mkdtarget = false;
   databufpos = 0;
   processing = true;
+  allconnectattempted = false;
+  sockid = -1;
+  xduperun = false;
+  typeirun = false;
+  cleanlyclosed = false;
+  cwdrawbuf->clear();
   currentpath = "/";
-  state = STATE_CONNECTING;
-  connectors.push_back(makePointer<FTPConnect>(nextconnectorid++, this, site->getAddress(), site->getPort(), getProxy(), true));
-  if (site->getAddresses().size() > 1) {
-    ticker = 0;
-    global->getTickPoke()->startPoke(this, "FTPConn", FTPCONN_TICK_INTERVAL, 0);
-  }
+  state = FTPConnState::CONNECTING;
+  clearConnectors();
+  connectors.push_back(std::make_shared<FTPConnect>(nextconnectorid++, this, site->getAddress(), getProxy(), true, site->getTLSMode() == TLSMode::IMPLICIT));
+  ticker = 0;
+  global->getTickPoke()->startPoke(this, "FTPConn", FTPCONN_TICK_INTERVAL, 0);
 }
 
 void FTPConn::connectAllAddresses() {
-  std::list<std::pair<std::string, std::string> > addresses = site->getAddresses();
+  allconnectattempted = true;
+  std::list<Address> addresses = site->getAddresses();
   Proxy * proxy = getProxy();
-  for (std::list<std::pair<std::string, std::string> >::const_iterator it = addresses.begin(); it != addresses.end(); it++) {
+  for (std::list<Address>::const_iterator it = addresses.begin(); it != addresses.end(); it++) {
     if (it == addresses.begin()) continue; // first one is already connected
-    connectors.push_back(makePointer<FTPConnect>(nextconnectorid++, this, it->first, it->second, proxy, false));
+    connectors.push_back(std::make_shared<FTPConnect>(nextconnectorid++, this, *it, proxy, false, site->getTLSMode() == TLSMode::IMPLICIT));
   }
 }
 
-Proxy * FTPConn::getProxy() const {
-  Proxy * proxy = NULL;
+Proxy* FTPConn::getProxy() const {
+  Proxy* proxy = nullptr;
   int proxytype = site->getProxyType();
   if (proxytype == SITE_PROXY_USE) {
     proxy = global->getProxyManager()->getProxy(site->getProxy());
@@ -107,45 +154,65 @@ Proxy * FTPConn::getProxy() const {
   return proxy;
 }
 
+Proxy* FTPConn::getDataProxy() const {
+  Proxy* proxy = nullptr;
+  int proxytype = site->getDataProxyType();
+  if (proxytype == SITE_PROXY_USE) {
+    proxy = global->getProxyManager()->getProxy(site->getDataProxy());
+  }
+  else if (proxytype == SITE_PROXY_GLOBAL) {
+    proxy = global->getProxyManager()->getDefaultDataProxy();
+  }
+  return proxy;
+}
+
 void FTPConn::clearConnectors() {
-  std::list<Pointer<FTPConnect> >::const_iterator it;
-  for (std::list<Pointer<FTPConnect> >::const_iterator it = connectors.begin(); it != connectors.end(); it++) {
+  std::list<std::shared_ptr<FTPConnect> >::const_iterator it;
+  for (std::list<std::shared_ptr<FTPConnect> >::const_iterator it = connectors.begin(); it != connectors.end(); it++) {
     (*it)->disengage();
     global->getWorkManager()->deferDelete(*it);
   }
   connectors.clear();
 }
 
-void FTPConn::FDDisconnected(int sockid) {
-  if (state != STATE_DISCONNECTED) {
-    rawBufWriteLine("[Disconnected]");
+void FTPConn::FDDisconnected(int sockid, Core::DisconnectType reason, const std::string& details) {
+  if (this->sockid != sockid) {
+    return;
+  }
+  if (state != FTPConnState::DISCONNECTED) {
+    rawBufWriteLine("[Disconnected: " + details + "]");
     this->status = "disconnected";
-    state = STATE_DISCONNECTED;
+    state = FTPConnState::DISCONNECTED;
     sl->disconnected(id);
+  }
+  if (reason == Core::DisconnectType::ERROR) {
+    global->getEventLog()->log("FTPConn", site->getName() + " " + std::to_string(id) + ": " + details, Core::LogLevel::ERROR);
   }
 }
 
-void FTPConn::FDSSLSuccess(int sockid) {
-  printCipher(sockid);
-  if (state == STATE_AUTH_TLS) {
+void FTPConn::FDSSLSuccess(int sockid, const std::string & cipher) {
+  printCipher(cipher);
+  if (state == FTPConnState::AUTH_TLS) {
     doUSER(false);
   }
   else {
-    state = STATE_IDLE;
+    state = FTPConnState::IDLE;
   }
 }
 
-void FTPConn::FDSSLFail(int sockid) {
-
+void FTPConn::printCipher(const std::string& cipher) {
+  rawBufWriteLine("[Cipher: " + cipher + "]");
 }
 
-void FTPConn::printCipher(int sockid) {
-  rawBufWriteLine("[Cipher: " + iom->getCipher(sockid) + "]");
+void FTPConn::printLocalError(const std::string& info) {
+  rawBufWriteLine("[Error: " + info + "]");
 }
 
 bool FTPConn::parseData(char * data, unsigned int datalen, char ** databuf, unsigned int & databuflen, unsigned int & databufpos, int & databufcode) {
-  while (databufpos + datalen > databuflen) {
-    databuflen = databuflen * 2;
+  if (databufpos + datalen > databuflen) {
+    while (databufpos + datalen > databuflen) {
+      databuflen *= 2;
+    }
     char * newdatabuf = (char *) malloc(databuflen);
     memcpy(newdatabuf, *databuf, databufpos);
     delete *databuf;
@@ -187,155 +254,184 @@ bool FTPConn::parseData(char * data, unsigned int datalen, char ** databuf, unsi
 }
 
 void FTPConn::FDData(int sockid, char * data, unsigned int datalen) {
-  if (state != STATE_STAT) {
+  if (this->sockid != sockid) {
+    return;
+  }
+  if (state != FTPConnState::STAT && state != FTPConnState::STOR && state != FTPConnState::PRET_STOR) {
     rawBufWrite(std::string(data, datalen));
+  }
+  if (state == FTPConnState::CWD) {
+    cwdrawbuf->write(std::string(data, datalen));
   }
   if (parseData(data, datalen, &databuf, databuflen, databufpos, databufcode)) {
     switch(state) {
-      case STATE_AUTH_TLS: // awaiting AUTH TLS response
+      case FTPConnState::AUTH_TLS: // awaiting AUTH TLS response
         AUTHTLSResponse();
         break;
-      case STATE_USER: // awaiting USER response
+      case FTPConnState::USER: // awaiting USER response
         USERResponse();
         break;
-      case STATE_PASS: // awaiting PASS response
+      case FTPConnState::PASS: // awaiting PASS response
         PASSResponse();
         break;
-      case STATE_STAT: // awaiting STAT response
+      case FTPConnState::STAT: // awaiting STAT response
         STATResponse();
         break;
-      case STATE_PWD: // awaiting PWD response
+      case FTPConnState::PWD: // awaiting PWD response
         PWDResponse();
         break;
-      case STATE_PROT_P: // awaiting PROT P response
+      case FTPConnState::PROT_P: // awaiting PROT P response
         PROTPResponse();
         break;
-      case STATE_PROT_C:  // awaiting PROT C response
+      case FTPConnState::PROT_C:  // awaiting PROT C response
         PROTCResponse();
         break;
-      case STATE_RAW: // awaiting raw response
+      case FTPConnState::RAW: // awaiting raw response
         RawResponse();
         break;
-      case STATE_CPSV: // awaiting CPSV response
+      case FTPConnState::CPSV: // awaiting CPSV response
         CPSVResponse();
         break;
-      case STATE_PASV: // awaiting PASV response
+      case FTPConnState::PASV: // awaiting PASV response
         PASVResponse();
         break;
-      case STATE_PORT: // awaiting PORT response
+      case FTPConnState::PORT: // awaiting PORT response
         PORTResponse();
         break;
-      case STATE_CWD: // awaiting CWD response
+      case FTPConnState::EPSV: // awaiting EPSV response
+        EPSVResponse();
+        break;
+      case FTPConnState::EPRT: // awaiting EPRT response
+        EPRTResponse();
+        break;
+      case FTPConnState::CEPR_ON: // awaiting CEPR ON response
+        CEPRONResponse();
+        break;
+      case FTPConnState::CWD: // awaiting CWD response
         CWDResponse();
         break;
-      case STATE_MKD: // awaiting MKD response
+      case FTPConnState::MKD: // awaiting MKD response
         MKDResponse();
         break;
-      case STATE_PRET_RETR: // awaiting PRET RETR response
+      case FTPConnState::PRET_RETR: // awaiting PRET RETR response
         PRETRETRResponse();
         break;
-      case STATE_PRET_STOR: // awaiting PRET STOR response
+      case FTPConnState::PRET_STOR: // awaiting PRET STOR response
         PRETSTORResponse();
         break;
-      case STATE_RETR: // awaiting RETR response
+      case FTPConnState::RETR: // awaiting RETR response
         RETRResponse();
         break;
-      case STATE_RETR_COMPLETE: // awaiting RETR complete
+      case FTPConnState::RETR_COMPLETE: // awaiting RETR complete
         RETRComplete();
         break;
-      case STATE_STOR: // awaiting STOR response
+      case FTPConnState::STOR: // awaiting STOR response
         STORResponse();
         break;
-      case STATE_STOR_COMPLETE: // awaiting STOR complete
+      case FTPConnState::STOR_COMPLETE: // awaiting STOR complete
         STORComplete();
         break;
-      case STATE_ABOR: // awaiting ABOR response
+      case FTPConnState::ABOR: // awaiting ABOR response
         ABORResponse();
         break;
-      case STATE_QUIT: // awaiting QUIT response
+      case FTPConnState::QUIT: // awaiting QUIT response
         QUITResponse();
         break;
-      case STATE_USER_LOGINKILL: // awaiting loginkilling USER response
+      case FTPConnState::USER_LOGINKILL: // awaiting loginkilling USER response
         USERResponse();
         break;
-      case STATE_PASS_LOGINKILL: // awaiting loginkilling PASS response
+      case FTPConnState::PASS_LOGINKILL: // awaiting loginkilling PASS response
         PASSResponse();
         break;
-      case STATE_WIPE: // awaiting WIPE response
+      case FTPConnState::WIPE: // awaiting WIPE response
         WIPEResponse();
         break;
-      case STATE_DELE: // awaiting DELE response
+      case FTPConnState::DELE: // awaiting DELE response
         DELEResponse();
         break;
-      case STATE_NUKE: // awaiting SITE NUKE response
+      case FTPConnState::RMD: // awaiting RMD response
+        RMDResponse();
+        break;
+      case FTPConnState::NUKE: // awaiting SITE NUKE response
         NUKEResponse();
         break;
-      case STATE_LIST: // awaiting LIST response
+      case FTPConnState::LIST: // awaiting LIST response
         LISTResponse();
         break;
-      case STATE_PRET_LIST: // awaiting PRET LIST response
+      case FTPConnState::PRET_LIST: // awaiting PRET LIST response
         PRETLISTResponse();
         break;
-      case STATE_LIST_COMPLETE: // awaiting LIST complete
+      case FTPConnState::LIST_COMPLETE: // awaiting LIST complete
         LISTComplete();
         break;
-      case STATE_SSCN_ON: // awaiting SSCN ON response
+      case FTPConnState::SSCN_ON: // awaiting SSCN ON response
         SSCNONResponse();
         break;
-      case STATE_SSCN_OFF: // awaiting SSCN OFF response
+      case FTPConnState::SSCN_OFF: // awaiting SSCN OFF response
         SSCNOFFResponse();
         break;
-      case STATE_PASV_ABORT: // awaiting aborting PASV
+      case FTPConnState::PASV_ABORT: // awaiting aborting PASV
         PASVAbortResponse();
         break;
-      case STATE_PBSZ: // awaiting PBSZ 0 response
+      case FTPConnState::PBSZ: // awaiting PBSZ 0 response
         PBSZ0Response();
         break;
-      case STATE_TYPEI: // awaiting TYPE I response
+      case FTPConnState::TYPEI: // awaiting TYPE I response
         TYPEIResponse();
+        break;
+      case FTPConnState::XDUPE: // awaiting XDUPE response
+        XDUPEResponse();
+        break;
+      case FTPConnState::RNFR: // awaiting RNFR response
+        RNFRResponse();
+        break;
+      case FTPConnState::RNTO: // awaiting RNTO response
+        RNTOResponse();
         break;
       default: // nothing expected at this time, discard
         break;
     }
-    if (isConnected() && !isProcessing()) {
-      state = STATE_IDLE;
+    if (!isProcessing()) {
+      currentco.reset();
+      currentfl = NULL;
+      if (isConnected()) {
+        state = FTPConnState::IDLE;
+      }
     }
     databufpos = 0;
   }
 }
 
-void FTPConn::ftpConnectInfo(int connectorid, const std::string & info) {
+void FTPConn::ftpConnectInfo(int connectorid, const std::string& info) {
   rawBufWriteLine(info);
 }
 
-void FTPConn::ftpConnectSuccess(int connectorid) {
-  if (state != STATE_CONNECTING) {
+void FTPConn::ftpConnectSuccess(int connectorid, const Address& addr) {
+  if (state != FTPConnState::CONNECTING) {
     return;
   }
-  std::list<Pointer<FTPConnect> >::const_iterator it;
-  for (it = connectors.begin(); it != connectors.end(); it++) {
-    if ((*it)->getId() == connectorid) {
+  std::shared_ptr<FTPConnect> connector;
+  for (const std::shared_ptr<FTPConnect>& it : connectors) {
+    if (it->getId() == connectorid) {
+      connector = it;
       break;
     }
   }
-  util::assert(it != connectors.end());
-  sockid = (*it)->handedOver();
+  assert(connector);
+  sockid = connector->handedOver();
+  connectedaddr = addr;
   iom->adopt(this, sockid);
-  if ((*it)->isPrimary()) {
-    global->getTickPoke()->stopPoke(this, 0);
-  }
-  else {
-    std::string addr = (*it)->getAddress();
-    std::string port = (*it)->getPort();
-    site->setPrimaryAddress((*it)->getAddress(), (*it)->getPort());
-    rawBufWriteLine("[Setting " + addr + ":" + port + " as primary]");
+  global->getTickPoke()->stopPoke(this, 0);
+  if (!connector->isPrimary()) {
+    site->setPrimaryAddress(connector->getAddress());
+    rawBufWriteLine("[Setting " + connector->getAddress().toString() + " as primary address]");
   }
   if (connectors.size() > 1) {
     rawBufWriteLine("[Disconnecting other attempts]");
   }
   clearConnectors();
-  if (site->SSL()) {
-    state = STATE_AUTH_TLS;
+  if (site->getTLSMode() == TLSMode::AUTH_TLS) {
+    state = FTPConnState::AUTH_TLS;
     sendEcho("AUTH TLS");
   }
   else {
@@ -344,37 +440,43 @@ void FTPConn::ftpConnectSuccess(int connectorid) {
 }
 
 void FTPConn::ftpConnectFail(int connectorid) {
-  if (state != STATE_CONNECTING) {
+  if (state != FTPConnState::CONNECTING) {
     return;
   }
-  std::list<Pointer<FTPConnect> >::iterator it;
+  std::list<std::shared_ptr<FTPConnect> >::iterator it;
   for (it = connectors.begin(); it != connectors.end(); it++) {
     if ((*it)->getId() == connectorid) {
       break;
     }
   }
-  util::assert(it != connectors.end());
+  assert(it != connectors.end());
   bool primary = (*it)->isPrimary();
   global->getWorkManager()->deferDelete(*it);
   connectors.erase(it);
   if (primary) {
-    global->getTickPoke()->stopPoke(this, 0);
-    if (site->getAddresses().size() > 1) {
+    if (site->getAddresses().size() > 1 && !allconnectattempted) {
       connectAllAddresses();
     }
   }
   if (!connectors.size()) {
-    state = STATE_DISCONNECTED;
+    global->getTickPoke()->stopPoke(this, 0);
+    state = FTPConnState::DISCONNECTED;
     sl->connectFailed(id);
   }
 }
 
-void FTPConn::tick(int) {
+void FTPConn::tick(int message) {
   ticker += FTPCONN_TICK_INTERVAL;
+  std::list<std::shared_ptr<FTPConnect> > ticklist = connectors;
+  for (std::list<std::shared_ptr<FTPConnect> >::const_iterator it = ticklist.begin(); it != ticklist.end(); it++) {
+    (*it)->tickIntern();
+  }
   if (ticker >= 1000) {
-    if (state == STATE_CONNECTING) {
+    if (state == FTPConnState::CONNECTING && !allconnectattempted) {
       connectAllAddresses();
     }
+  }
+  if (!connectors.size()) {
     global->getTickPoke()->stopPoke(this, 0);
   }
 }
@@ -392,24 +494,28 @@ void FTPConn::AUTHTLSResponse() {
   }
   else {
     rawBufWriteLine("[Unknown response]");
-    state = STATE_DISCONNECTED;
     processing = false;
-    iom->closeSocket(sockid);
     sl->TLSFailed(id);
   }
 }
 
 void FTPConn::doUSER(bool killer) {
   if (!killer) {
-    state = STATE_USER;
+    state = FTPConnState::USER;
   }
   else {
-    state = STATE_USER_LOGINKILL;
+    state = FTPConnState::USER_LOGINKILL;
   }
   sendEcho((std::string("USER ") + (killer ? "!" : "") + site->getUser()).data());
 }
 
 void FTPConn::USERResponse() {
+  if (databufcode == 230) {
+    processing = false;
+    this->status = "connected";
+    finishLogin();
+    return;
+  }
   if (databufcode == 331) {
     std::string pass = site->getPass();
     std::string passc = "";
@@ -417,11 +523,11 @@ void FTPConn::USERResponse() {
     std::string output = "PASS " + std::string(passc);
     rawBufWriteLine(output);
     status = output;
-    if (state == STATE_USER) {
-      state = STATE_PASS;
+    if (state == FTPConnState::USER) {
+      state = FTPConnState::PASS;
     }
     else {
-      state = STATE_PASS_LOGINKILL;
+      state = FTPConnState::PASS_LOGINKILL;
     }
     iom->sendData(sockid, std::string("PASS ") + site->getPass()  + "\r\n");
   }
@@ -441,7 +547,7 @@ void FTPConn::USERResponse() {
     if (sitefull) {
       sl->userDeniedSiteFull(id);
     }
-    else if (state == STATE_USER) {
+    else if (state == FTPConnState::USER) {
       if (simultaneous) {
         sl->userDeniedSimultaneousLogins(id);
       }
@@ -459,14 +565,7 @@ void FTPConn::PASSResponse() {
   processing = false;
   this->status = "connected";
   if (databufcode == 230) {
-    if (site->forceBinaryMode()) {
-      state = STATE_TYPEI;
-      doTYPEI();
-    }
-    else {
-      state = STATE_PASS;
-      sl->commandSuccess(id);
-    }
+    finishLogin();
   }
   else {
     bool sitefull = false;
@@ -483,7 +582,7 @@ void FTPConn::PASSResponse() {
     if (sitefull) {
       sl->userDeniedSiteFull(id);
     }
-    else if (state == STATE_PASS) {
+    else if (state == FTPConnState::PASS) {
       if (simultaneous) {
         sl->userDeniedSimultaneousLogins(id);
       }
@@ -497,10 +596,50 @@ void FTPConn::PASSResponse() {
   }
 }
 
+void FTPConn::finishLogin() {
+  if (site->forceBinaryMode() && !typeirun) {
+    doTYPEI();
+  }
+  else if (site->useXDUPE() && !xduperun) {
+    doXDUPE();
+  }
+  else {
+    state = FTPConnState::LOGIN;
+    sl->commandSuccess(id, state);
+  }
+}
+
 void FTPConn::TYPEIResponse() {
   processing = false;
   if (databufcode == 200) {
-    sl->commandSuccess(id);
+    typeirun = true;
+    finishLogin();
+  }
+  else {
+    sl->commandFail(id);
+  }
+}
+
+void FTPConn::XDUPEResponse() {
+  processing = false;
+  xduperun = true;
+  finishLogin();
+}
+
+void FTPConn::RNFRResponse() {
+  processing = false;
+  if (databufcode == 350) {
+    sl->commandSuccess(id, state);
+  }
+  else {
+    sl->commandFail(id);
+  }
+}
+
+void FTPConn::RNTOResponse() {
+  processing = false;
+  if (databufcode == 250) {
+    sl->commandSuccess(id, state);
   }
   else {
     sl->commandFail(id);
@@ -513,40 +652,63 @@ void FTPConn::reconnect() {
 }
 
 void FTPConn::doSTAT() {
-  doSTAT(NULL, new FileList(site->getUser(), currentpath));
-}
-
-void FTPConn::doSTAT(CommandOwner * co, FileList * filelist) {
-  state = STATE_STAT;
-  currentco = co;
-  currentfl = filelist;
+  state = FTPConnState::STAT;
+  currentco.reset();
+  currentfl = newFileList();
   sendEcho("STAT -l");
 }
 
+void FTPConn::doSTATBigL() {
+  state = FTPConnState::STAT;
+  currentco.reset();
+  currentfl = newFileList();
+  sendEcho("STAT -L");
+}
+
+void FTPConn::doSTAT(const std::shared_ptr<CommandOwner> & co, const std::shared_ptr<FileList>& fl) {
+  state = FTPConnState::STAT;
+  currentco = co;
+  currentfl = fl;
+  sendEcho("STAT -l");
+}
+
+void FTPConn::doSTATBigL(const std::shared_ptr<CommandOwner> & co, const std::shared_ptr<FileList>& fl) {
+  state = FTPConnState::STAT;
+  currentco = co;
+  currentfl = fl;
+  sendEcho("STAT -L");
+}
+
 void FTPConn::doSTATla() {
-  state = STATE_STAT;
-  currentco = NULL;
-  currentfl = new FileList(site->getUser(), currentpath);
+  state = FTPConnState::STAT;
+  currentco.reset();
+  currentfl = newFileList();
   sendEcho("STAT -la");
 }
 
-void FTPConn::prepareLIST() {
-  currentco = NULL;
-  currentfl = new FileList(site->getUser(), currentpath);
+void FTPConn::doSTATBigLa() {
+  state = FTPConnState::STAT;
+  currentco.reset();
+  currentfl = newFileList();
+  sendEcho("STAT -La");
 }
 
-void FTPConn::prepareLIST(CommandOwner * co, FileList * filelist) {
+std::shared_ptr<FileList> FTPConn::newFileList() const {
+  return std::make_shared<FileList>(site->getUser(), currentpath);
+}
+
+void FTPConn::setListData(const std::shared_ptr<CommandOwner> & co, const std::shared_ptr<FileList>& fl) {
   currentco = co;
-  currentfl = filelist;
+  currentfl = fl;
 }
 
 void FTPConn::doLIST() {
-  state = STATE_LIST;
+  state = FTPConnState::LIST;
   sendEcho("LIST");
 }
 
 void FTPConn::doLISTa() {
-  state = STATE_LIST;
+  state = FTPConnState::LIST;
   sendEcho("LIST -a");
 }
 
@@ -565,8 +727,8 @@ void FTPConn::STATResponse() {
 
 void FTPConn::LISTResponse() {
   if (databufcode == 150 || databufcode == 125) {
-    sl->commandSuccess(id);
-    state = STATE_LIST_COMPLETE;
+    state = FTPConnState::LIST_COMPLETE;
+    sl->commandSuccess(id, FTPConnState::LIST);
   }
   else {
     processing = false;
@@ -577,7 +739,7 @@ void FTPConn::LISTResponse() {
 void FTPConn::LISTComplete() {
   processing = false;
   if (databufcode == 226) {
-    sl->commandSuccess(id);
+    sl->commandSuccess(id, state);
   }
   else {
     sl->commandFail(id);
@@ -588,11 +750,12 @@ void FTPConn::updateName() {
   rawbuf->rename(site->getName());
 }
 
-std::string FTPConn::getCurrentPath() const {
+const Path & FTPConn::getCurrentPath() const {
   return currentpath;
 }
+
 void FTPConn::doPWD() {
-  state = STATE_PWD;
+  state = FTPConnState::PWD;
   sendEcho("PWD");
 }
 
@@ -612,15 +775,15 @@ void FTPConn::PWDResponse() {
 }
 
 void FTPConn::doPROTP() {
-  state = STATE_PROT_P;
+  state = FTPConnState::PROT_P;
   sendEcho("PROT P");
 }
 
 void FTPConn::PROTPResponse() {
   processing = false;
   if (databufcode == 200) {
-    protectedmode = PROT_P;
-    sl->commandSuccess(id);
+    protectedmode = ProtMode::P;
+    sl->commandSuccess(id, state);
   }
   else {
     if (databufcode == 503) {
@@ -635,15 +798,15 @@ void FTPConn::PROTPResponse() {
 }
 
 void FTPConn::doPROTC() {
-  state = STATE_PROT_C;
+  state = FTPConnState::PROT_C;
   sendEcho("PROT C");
 }
 
 void FTPConn::PROTCResponse() {
   processing = false;
   if (databufcode == 200) {
-    protectedmode = PROT_C;
-    sl->commandSuccess(id);
+    protectedmode = ProtMode::C;
+    sl->commandSuccess(id, state);
   }
   else {
     if (databufcode == 503) {
@@ -659,11 +822,11 @@ void FTPConn::PROTCResponse() {
 
 void FTPConn::doSSCN(bool on) {
   if (on) {
-    state = STATE_SSCN_ON;
+    state = FTPConnState::SSCN_ON;
     sendEcho("SSCN ON");
   }
   else {
-    state = STATE_SSCN_OFF;
+    state = FTPConnState::SSCN_OFF;
     sendEcho("SSCN OFF");
   }
 }
@@ -672,7 +835,7 @@ void FTPConn::SSCNONResponse() {
   processing = false;
   if (databufcode == 200) {
     sscnmode = true;
-    sl->commandSuccess(id);
+    sl->commandSuccess(id, state);
   }
   else {
     sl->commandFail(id);
@@ -683,46 +846,67 @@ void FTPConn::SSCNOFFResponse() {
   processing = false;
   if (databufcode == 200) {
     sscnmode = false;
-    sl->commandSuccess(id);
+    sl->commandSuccess(id, state);
   }
   else {
     sl->commandFail(id);
   }
 }
 
-void FTPConn::doRaw(std::string command) {
-  state = STATE_RAW;
+void FTPConn::doRaw(const std::string & command) {
+  state = FTPConnState::RAW;
   sendEcho(command.c_str());
 }
 
-void FTPConn::doWipe(std::string path, bool recursive) {
-  state = STATE_WIPE;
-  sendEcho(std::string("SITE WIPE ") + (recursive ? "-r " : "") + path);
+void FTPConn::doWipe(const Path & path, bool recursive) {
+  state = FTPConnState::WIPE;
+  sendEcho(std::string("SITE WIPE ") + (recursive ? "-r " : "") + path.toString());
 }
 
-void FTPConn::doNuke(std::string path, int multiplier, std::string reason) {
-  state = STATE_NUKE;
-  sendEcho("SITE NUKE " + path + " " + util::int2Str(multiplier) + " " + reason);
+void FTPConn::doNuke(const Path & path, int multiplier, const std::string & reason) {
+  state = FTPConnState::NUKE;
+  sendEcho("SITE NUKE " + path.toString() + " " + std::to_string(multiplier) + " " + reason);
 }
-void FTPConn::doDELE(std::string path) {
-  state = STATE_DELE;
-  sendEcho("DELE " + path);
+
+void FTPConn::doDELE(const Path & path) {
+  state = FTPConnState::DELE;
+  sendEcho("DELE " + path.toString());
+}
+
+void FTPConn::doRMD(const Path & path) {
+  state = FTPConnState::RMD;
+  sendEcho("RMD " + path.toString());
 }
 
 void FTPConn::doPBSZ0() {
-  state = STATE_PBSZ;
+  state = FTPConnState::PBSZ;
   sendEcho("PBSZ 0");
 }
 
 void FTPConn::doTYPEI() {
-  state = STATE_TYPEI;
+  state = FTPConnState::TYPEI;
   sendEcho("TYPE I");
+}
+
+void FTPConn::doXDUPE() {
+  state = FTPConnState::XDUPE;
+  sendEcho("SITE XDUPE 3");
+}
+
+void FTPConn::doRNFR(const std::string& from) {
+  state = FTPConnState::RNFR;
+  sendEcho("RNFR " + from);
+}
+
+void FTPConn::doRNTO(const std::string& to) {
+  state = FTPConnState::RNTO;
+  sendEcho("RNTO " + to);
 }
 
 void FTPConn::PBSZ0Response() {
   processing = false;
   if (databufcode == 200) {
-    sl->commandSuccess(id);
+    sl->commandSuccess(id, state);
   }
   else {
     sl->commandFail(id);
@@ -731,7 +915,7 @@ void FTPConn::PBSZ0Response() {
 
 void FTPConn::RawResponse() {
   processing = false;
-  std::string ret = std::string(databuf, databufpos);
+  std::string ret(databuf, databufpos);
   sl->rawCommandResultRetrieved(id, ret);
 }
 
@@ -739,8 +923,10 @@ void FTPConn::WIPEResponse() {
   processing = false;
   if (databufcode == 200) {
     std::string data = std::string(databuf, databufpos);
-    if (data.find("successfully") != std::string::npos) {
-      sl->commandSuccess(id);
+    if (data.find("successfully") != std::string::npos ||
+        data.find("okay") != std::string::npos)
+    {
+      sl->commandSuccess(id, state);
       return;
     }
   }
@@ -750,7 +936,17 @@ void FTPConn::WIPEResponse() {
 void FTPConn::DELEResponse() {
   processing = false;
   if (databufcode == 250) {
-    sl->commandSuccess(id);
+    sl->commandSuccess(id, state);
+  }
+  else {
+    sl->commandFail(id);
+  }
+}
+
+void FTPConn::RMDResponse() {
+  processing = false;
+  if (databufcode == 250) {
+    sl->commandSuccess(id, state);
   }
   else {
     sl->commandFail(id);
@@ -761,8 +957,10 @@ void FTPConn::NUKEResponse() {
   processing = false;
   if (databufcode == 200) {
     std::string data = std::string(databuf, databufpos);
-    if (data.find("uccess") != std::string::npos) {
-      sl->commandSuccess(id);
+    if (data.find("uccess") != std::string::npos ||
+        data.find("succeeded") != std::string::npos)
+    {
+      sl->commandSuccess(id, state);
     }
     else {
       sl->commandFail(id);
@@ -774,25 +972,16 @@ void FTPConn::NUKEResponse() {
 }
 
 void FTPConn::doCPSV() {
-  state = STATE_CPSV;
+  state = FTPConnState::CPSV;
   sendEcho("CPSV");
 }
 
 void FTPConn::CPSVResponse() {
-  processing = false;
-  if (databufcode == 227) {
-    std::string data = std::string(databuf, databufpos);
-    size_t start = data.find('(') + 1;
-    size_t end = data.find(')');
-    sl->gotPassiveAddress(id, data.substr(start, end-start));
-  }
-  else {
-    sl->commandFail(id);
-  }
+  PASVResponse();
 }
 
 void FTPConn::doPASV() {
-  state = STATE_PASV;
+  state = FTPConnState::PASV;
   sendEcho("PASV");
 }
 
@@ -802,97 +991,241 @@ void FTPConn::PASVResponse() {
     std::string data = std::string(databuf, databufpos);
     size_t start = data.find('(') + 1;
     size_t end = data.find(')');
-    sl->gotPassiveAddress(id, data.substr(start, end-start));
+    std::string addr = data.substr(start, end - start);
+    int count = 0;
+    for (unsigned int i = 0; i < addr.length(); i++) {
+      if (addr[i] == ',') count++;
+    }
+    if (count == 2 && addr.substr(0, 2) == "1,") {
+      std::string connaddr = getConnectedAddress();
+      for (unsigned int i = 0; i < connaddr.length(); i++) {
+        if (connaddr[i] == '.') connaddr[i] = ',';
+      }
+      addr = connaddr + "," + addr.substr(2);
+    }
+    std::string host;
+    int port;
+    fromPASVString(addr, host, port);
+    sl->gotPassiveAddress(id, host, port);
   }
   else {
     sl->commandFail(id);
   }
 }
 
-void FTPConn::doPORT(std::string addr) {
-  state = STATE_PORT;
+void FTPConn::doPORT(const std::string& host, int port) {
+  state = FTPConnState::PORT;
+  std::string addr = toPASVString(host, port);
   sendEcho(("PORT " + addr).c_str());
 }
 
 void FTPConn::PORTResponse() {
   processing = false;
   if (databufcode == 200) {
-    sl->commandSuccess(id);
+    sl->commandSuccess(id, state);
   }
   else {
     sl->commandFail(id);
   }
 }
 
-void FTPConn::doCWD(std::string path) {
-  if (path == currentpath) {
-    global->getEventLog()->log("FTPConn " + site->getName() + util::int2Str(id),
-        "WARNING: Noop CWD requested: " + path);
+void FTPConn::doEPSV() {
+  state = FTPConnState::EPSV;
+  sendEcho("EPSV 2");
+}
+
+void FTPConn::EPSVResponse() {
+  processing = false;
+  if (databufcode == 229) {
+    std::string data = std::string(databuf, databufpos);
+    size_t tok1 = data.find("(|");
+    if (tok1 == std::string::npos) {
+      sl->commandFail(id);
+      return;
+    }
+    size_t tok2 = data.find('|', tok1 + 2);
+    if (tok2 == std::string::npos) {
+      sl->commandFail(id);
+      return;
+    }
+    size_t tok3 = data.find('|', tok2 + 1);
+    if (tok3 == std::string::npos) {
+      sl->commandFail(id);
+      return;
+    }
+    size_t tok4 = data.find("|)", tok3 + 1);
+    if (tok4 == std::string::npos) {
+      sl->commandFail(id);
+      return;
+    }
+    if (data.substr(tok1 + 2, tok2 - (tok1 + 2)) != "2") {
+      sl->commandFail(id);
+      return;
+    }
+    std::string host = data.substr(tok2 + 1, tok3 - (tok2 + 1));
+    if (host.empty()) {
+      host = connectedaddr.host;
+    }
+    if (host.find(":") == std::string::npos) {
+      sl->commandFail(id);
+      return;
+    }
+    host = Core::IOManager::compactIPv6Address(host);
+    int port = 0;
+    try {
+      port = std::stoi(data.substr(tok3 + 1, tok4 - (tok3 + 1)));
+    }
+    catch (std::exception&) {
+      sl->commandFail(id);
+      return;
+    }
+    sl->gotPassiveAddress(id, host, port);
     return;
   }
+  sl->commandFail(id);
+}
+
+void FTPConn::doEPRT(const std::string& host, int port) {
+  state = FTPConnState::EPRT;
+  sendEcho("EPRT |2|" + host + "|" + std::to_string(port) + "|");
+}
+
+void FTPConn::EPRTResponse() {
+  processing = false;
+  if (databufcode == 200) {
+    sl->commandSuccess(id, state);
+  }
+  else {
+    sl->commandFail(id);
+  }
+}
+
+void FTPConn::doCEPRON() {
+  state = FTPConnState::CEPR_ON;
+  sendEcho("CEPR ON");
+}
+
+void FTPConn::CEPRONResponse() {
+  processing = false;
+  ceprenabled = true;
+  sl->commandSuccess(id, state);
+}
+
+void FTPConn::doCWD(const Path & path, const std::shared_ptr<CommandOwner> & co) {
+  doCWD(path, nullptr, co);
+}
+
+void FTPConn::doCWD(const std::shared_ptr<FileList>& fl, const std::shared_ptr<CommandOwner>& co) {
+  doCWD(fl->getPath(), fl, co);
+}
+
+void FTPConn::doCWD(const Path& path, const std::shared_ptr<FileList>& fl, const std::shared_ptr<CommandOwner>& co) {
+  assert(path != "");
+  currentfl = fl;
+  currentco = co;
   targetpath = path;
-  state = STATE_CWD;
-  sendEcho(("CWD " + path).c_str());
+  if (targetpath == currentpath) {
+    global->getEventLog()->log("FTPConn " + site->getName() + std::to_string(id),
+        "WARNING: Noop CWD requested: " + path.toString());
+    return;
+  }
+  state = FTPConnState::CWD;
+  std::string command = ("CWD " + path.toString()).c_str();
+  cwdrawbuf->clear();
+  cwdrawbuf->writeLine(command);
+  sendEcho(command);
 }
 
 void FTPConn::CWDResponse() {
   processing = false;
-  if (databufcode == 250) {
+  if (databufcode == 250 || databufcode == 200) {
     currentpath = targetpath;
-    sl->commandSuccess(id);
+    sl->commandSuccess(id, state);
   }
   else {
     sl->commandFail(id);
   }
 }
 
-void FTPConn::doMKD(std::string dir) {
+void FTPConn::doMKD(const Path & dir, const std::shared_ptr<CommandOwner> & co) {
+  doMKD(dir, nullptr, co);
+}
+
+void FTPConn::doMKD(const std::shared_ptr<FileList>& fl, const std::shared_ptr<CommandOwner>& co) {
+  doMKD(fl->getPath(), fl, co);
+}
+
+void FTPConn::doMKD(const Path& dir, const std::shared_ptr<FileList>& fl, const std::shared_ptr<CommandOwner>& co) {
+  assert(dir != "");
+  currentfl = fl;
+  currentco = co;
   targetpath = dir;
-  state = STATE_MKD;
-  sendEcho(("MKD " + dir).c_str());
+  state = FTPConnState::MKD;
+  sendEcho(("MKD " + targetpath.toString()).c_str());
 }
 
 void FTPConn::MKDResponse() {
   processing = false;
   if (databufcode == 257) {
-    sl->commandSuccess(id);
+    sl->commandSuccess(id, state);
   }
   else {
-    if (databufcode == 550 &&
-        std::string(databuf, databufpos).find("File exist") !=
-            std::string::npos) {
-      sl->commandSuccess(id);
+    if (databufcode == 550) {
+      std::string message(databuf, databufpos);
+      if (message.find("File exist") != std::string::npos ||
+          message.find("already exists") != std::string::npos)
+      {
+        sl->commandSuccess(id, state);
+        return;
+      }
     }
-    else {
-      sl->commandFail(id);
-    }
+    sl->commandFail(id);
   }
 }
 
-void FTPConn::doPRETRETR(std::string file) {
-  state = STATE_PRET_RETR;
+void FTPConn::doPRETRETR(const std::string & file) {
+  state = FTPConnState::PRET_RETR;
   sendEcho(("PRET RETR " + file).c_str());
 }
 
 void FTPConn::PRETRETRResponse() {
   processing = false;
   if (databufcode == 200) {
-    sl->commandSuccess(id);
+    sl->commandSuccess(id, state);
   }
   else {
     sl->commandFail(id);
   }
 }
 
-void FTPConn::doPRETSTOR(std::string file) {
-  state = STATE_PRET_STOR;
+void FTPConn::doPRETSTOR(const std::string & file) {
+  state = FTPConnState::PRET_STOR;
   sendEcho(("PRET STOR " + file).c_str());
 }
 
 void FTPConn::PRETSTORResponse() {
   processing = false;
+  std::string response = std::string(databuf, databufpos);
+  if (databufcode == 553) {
+    bool dupe = false;
+    if (response.find(xdupematch) != std::string::npos) {
+      parseXDUPEData();
+      dupe = true;
+    }
+    else if (response.find(dupematch1) != std::string::npos ||
+             response.find(dupematch2) != std::string::npos)
+    {
+      dupe = true;
+    }
+    if (dupe) {
+      rawBufWrite(std::string(databuf, databufpos));
+      sl->commandFail(id, FailureType::DUPE);
+      return;
+    }
+  }
+  rawBufWrite(response);
   if (databufcode == 200) {
-    sl->commandSuccess(id);
+    sl->commandSuccess(id, state);
   }
   else {
     sl->commandFail(id);
@@ -900,29 +1233,33 @@ void FTPConn::PRETSTORResponse() {
 }
 
 void FTPConn::doPRETLIST() {
-  state = STATE_PRET_LIST;
+  state = FTPConnState::PRET_LIST;
   sendEcho("PRET LIST");
 }
 
 void FTPConn::PRETLISTResponse() {
   processing = false;
   if (databufcode == 200) {
-    sl->commandSuccess(id);
+    sl->commandSuccess(id, state);
   }
   else {
     sl->commandFail(id);
   }
 }
 
-void FTPConn::doRETR(std::string file) {
-  state = STATE_RETR;
+void FTPConn::doRETR(const std::string & file) {
+  state = FTPConnState::RETR;
   sendEcho(("RETR " + file).c_str());
 }
 
 void FTPConn::RETRResponse() {
-  if (databufcode == 150 || databufcode == 125) {
-    sl->commandSuccess(id);
-    state = STATE_RETR_COMPLETE;
+  if (databufcode == 150 || databufcode == 125 || databufcode == 226) {
+    state = FTPConnState::RETR_COMPLETE;
+    sl->commandSuccess(id, FTPConnState::RETR);
+    if (databufcode == 226) {
+      processing = false;
+      sl->commandSuccess(id, state);
+    }
   }
   else {
     processing = false;
@@ -933,22 +1270,46 @@ void FTPConn::RETRResponse() {
 void FTPConn::RETRComplete() {
   processing = false;
   if (databufcode == 226) {
-    sl->commandSuccess(id);
+    sl->commandSuccess(id, state);
   }
   else {
     sl->commandFail(id);
   }
 }
 
-void FTPConn::doSTOR(std::string file) {
-  state = STATE_STOR;
+void FTPConn::doSTOR(const std::string & file) {
+  state = FTPConnState::STOR;
   sendEcho(("STOR " + file).c_str());
 }
 
 void FTPConn::STORResponse() {
-  if (databufcode == 150 || databufcode == 125) {
-    sl->commandSuccess(id);
-    state = STATE_STOR_COMPLETE;
+  std::string response = std::string(databuf, databufpos);
+  if (databufcode == 550 || databufcode == 553) {
+    processing = false;
+    bool dupe = false;
+    if (response.find(xdupematch) != std::string::npos) {
+      parseXDUPEData();
+      dupe = true;
+    }
+    else if (response.find(dupematch1) != std::string::npos ||
+             response.find(dupematch2) != std::string::npos)
+    {
+      dupe = true;
+    }
+    if (dupe) {
+      rawBufWrite(std::string(databuf, databufpos));
+      sl->commandFail(id, FailureType::DUPE);
+      return;
+    }
+  }
+  rawBufWrite(response);
+  if (databufcode == 150 || databufcode == 125 || databufcode == 226) {
+    state = FTPConnState::STOR_COMPLETE;
+    sl->commandSuccess(id, FTPConnState::STOR);
+    if (databufcode == 226) {
+      processing = false;
+      sl->commandSuccess(id, state);
+    }
   }
   else {
     processing = false;
@@ -959,7 +1320,7 @@ void FTPConn::STORResponse() {
 void FTPConn::STORComplete() {
   processing = false;
   if (databufcode == 226) {
-    sl->commandSuccess(id);
+    sl->commandSuccess(id, state);
   }
   else {
     sl->commandFail(id);
@@ -967,48 +1328,48 @@ void FTPConn::STORComplete() {
 }
 
 void FTPConn::abortTransfer() {
-  state = STATE_ABOR;
+  state = FTPConnState::ABOR;
   sendEcho("ABOR");
 }
 
 void FTPConn::abortTransferPASV() {
-  state = STATE_PASV_ABORT;
+  state = FTPConnState::PASV_ABORT;
   sendEcho("PASV");
 }
 
 void FTPConn::ABORResponse() {
   processing = false;
-  sl->commandSuccess(id);
+  sl->commandSuccess(id, state);
 }
 
 void FTPConn::PASVAbortResponse() {
   processing = false;
-  sl->commandSuccess(id);
+  sl->commandSuccess(id, state);
 }
 
 void FTPConn::doQUIT() {
-  if (state != STATE_DISCONNECTED) {
-    state = STATE_QUIT;
+  if (state != FTPConnState::DISCONNECTED) {
+    state = FTPConnState::QUIT;
     sendEcho("QUIT");
+    cleanlyclosed = true;
   }
-}
-
-void FTPConn::doSSLHandshake() {
-  state = STATE_SSL_HANDSHAKE;
-  iom->forceSSLhandshake(sockid);
 }
 
 void FTPConn::QUITResponse() {
   processing = false;
   disconnect();
+  state = FTPConnState::DISCONNECTED;
+  sl->commandSuccess(id, FTPConnState::QUIT);
 }
 
 void FTPConn::disconnect() {
-  if (state == STATE_CONNECTING) {
+  if (state == FTPConnState::CONNECTING) {
     global->getTickPoke()->stopPoke(this, 0);
   }
-  if (state != STATE_DISCONNECTED) {
-    state = STATE_DISCONNECTED;
+  if (state != FTPConnState::DISCONNECTED) {
+    state = FTPConnState::DISCONNECTED;
+    processing = false;
+    cleanlyclosed = true;
     iom->closeSocket(sockid);
     clearConnectors();
     this->status = "disconnected";
@@ -1018,6 +1379,18 @@ void FTPConn::disconnect() {
 
 RawBuffer * FTPConn::getRawBuffer() const {
   return rawbuf;
+}
+
+RawBuffer * FTPConn::getCwdRawBuffer() const {
+  return cwdrawbuf;
+}
+
+int FTPConn::getSockId() const {
+  return sockid;
+}
+
+bool FTPConn::isCleanlyClosed() const {
+  return cleanlyclosed;
 }
 
 FTPConnState FTPConn::getState() const {
@@ -1032,6 +1405,10 @@ std::string FTPConn::getInterfaceAddress() const {
   return iom->getInterfaceAddress(sockid);
 }
 
+bool FTPConn::isIPv6() const {
+  return iom->getAddressFamily(sockid) == Core::AddressFamily::IPV6;
+}
+
 ProtMode FTPConn::getProtectedMode() const {
   return protectedmode;
 }
@@ -1040,23 +1417,15 @@ bool FTPConn::getSSCNMode() const {
   return sscnmode;
 }
 
-void FTPConn::setMKDCWDTarget(std::string section, std::string subpath) {
+bool FTPConn::getCEPREnabled() const {
+  return ceprenabled;
+}
+
+void FTPConn::setMKDCWDTarget(const Path & section, const Path & subpath) {
   mkdtarget = true;
   mkdsect = section;
   mkdpath = subpath;
-  size_t lastpos = 0;
-  mkdsubdirs.clear();
-  while (true) {
-    size_t splitpos = mkdpath.find("/", lastpos);
-    if (splitpos != std::string::npos) {
-      mkdsubdirs.push_back(mkdpath.substr(lastpos, splitpos - lastpos));
-    }
-    else {
-      mkdsubdirs.push_back(mkdpath.substr(lastpos));
-      break;
-    }
-    lastpos = splitpos + 1;
-  }
+  mkdsubdirs = mkdpath.split();
 }
 
 void FTPConn::finishMKDCWDTarget() {
@@ -1067,31 +1436,32 @@ bool FTPConn::hasMKDCWDTarget() const {
   return mkdtarget;
 }
 
-std::string FTPConn::getTargetPath() const {
+const Path & FTPConn::getTargetPath() const {
   return targetpath;
 }
 
-std::string FTPConn::getMKDCWDTargetSection() const {
+const Path & FTPConn::getMKDCWDTargetSection() const {
   return mkdsect;
 }
-std::string FTPConn::getMKDCWDTargetPath() const {
+
+const Path & FTPConn::getMKDCWDTargetPath() const {
   return mkdpath;
 }
 
-std::list<std::string> * FTPConn::getMKDSubdirs() {
-  return &mkdsubdirs;
+const std::list<std::string> & FTPConn::getMKDSubdirs() {
+  return mkdsubdirs;
 }
 
-FileList * FTPConn::currentFileList() const {
+std::shared_ptr<FileList> FTPConn::currentFileList() const {
   return currentfl;
 }
 
-CommandOwner * FTPConn::currentCommandOwner() const {
+const std::shared_ptr<CommandOwner> & FTPConn::currentCommandOwner() const {
   return currentco;
 }
 
-void FTPConn::setCurrentCommandOwner(CommandOwner * co) {
-  currentco = co;
+void FTPConn::resetCurrentCommandOwner() {
+  currentco.reset();
 }
 
 bool FTPConn::isProcessing() const {
@@ -1102,13 +1472,12 @@ void FTPConn::parseFileList(char * buf, unsigned int buflen) {
   char * loc = buf, * start;
   unsigned int files = 0;
   int touch = rand();
-  while (loc + 4 < buf + buflen && !(*(loc + 1) == '2' && *(loc + 2) == '1' && *(loc + 4) == ' ')) {
-    if (*(loc + 1) == '2' && *(loc + 2) == '1' && *(loc + 4) == '-') loc += 4;
-    start = loc;
-    while (loc < buf + buflen && loc - start < 40) {
-      start = loc;
-      while(loc < buf + buflen && *loc++ != '\n');
+  while (loc + 4 < buf + buflen && !(*loc == '2' && *(loc + 1) == '1' && *(loc + 3) == ' ')) {
+    if (*loc == '2' && *(loc + 1) == '1' && *(loc + 3) == '-') {
+      loc += 4;
     }
+    start = loc;
+    while(loc < buf + buflen && *loc++ != '\n');
     if (loc - start >= 40) {
       if (currentfl->updateFile(std::string(start, loc - start), touch)) {
         files++;
@@ -1118,19 +1487,68 @@ void FTPConn::parseFileList(char * buf, unsigned int buflen) {
   if (currentfl->getSize() > files) {
     currentfl->cleanSweep(touch);
   }
-  if (!currentfl->isFilled()) currentfl->setFilled();
+  if (currentfl->getState() != FileListState::LISTED) {
+    currentfl->setFilled();
+  }
+  currentfl->setRefreshed();
+}
+
+void FTPConn::parseXDUPEData() {
+  xdupelist.clear();
+  char * loc = databuf;
+  int lineendpos;
+  int xdupestart = -1;
+  int xdupeend = -1;
+  while ((lineendpos = util::chrfind(loc, databuf + databufpos - loc, '\n')) != -1) {
+    int lastpos = lineendpos;
+    if (lineendpos > 0 && loc[lineendpos - 1] == '\r') {
+      --lastpos;
+    }
+    int xdupepos = util::chrstrfind(loc, lastpos, xdupematch, xdupematchlen);
+    if (xdupepos != -1) {
+      if (xdupestart == -1) {
+        xdupestart = loc - databuf;
+      }
+      xdupelist.emplace_back(loc + xdupepos + xdupematchlen, lastpos - (xdupepos + xdupematchlen));
+    }
+    else if (xdupestart != -1 && xdupeend == -1) {
+      xdupeend = loc - databuf;
+    }
+    loc += lineendpos + 1;
+  }
+  if (xdupestart != -1) {
+    if (xdupeend == -1) {
+      xdupeend = databufpos - 2;
+    }
+    memmove(databuf + xdupestart + 24, databuf + xdupeend, databufpos - xdupeend);
+    memcpy(databuf + xdupestart, "[XDUPE data retrieved]\r\n", 24);
+    databufpos -= xdupeend - xdupestart - 24;
+  }
+
 }
 
 bool FTPConn::isConnected() const {
-  return state != STATE_DISCONNECTED;
+  return state != FTPConnState::DISCONNECTED;
 }
 
-void FTPConn::rawBufWrite(const std::string& data) {
+void FTPConn::rawBufWrite(const std::string & data) {
   rawbuf->write(data);
   aggregatedrawbuf->write(rawbuf->getTag(), data);
 }
 
-void FTPConn::rawBufWriteLine(const std::string& data) {
+void FTPConn::rawBufWriteLine(const std::string & data) {
   rawbuf->writeLine(data);
   aggregatedrawbuf->writeLine(rawbuf->getTag(), data);
+}
+
+void FTPConn::setRawBufferCallback(RawBufferCallback * callback) {
+  rawbuf->setCallback(callback);
+}
+
+void FTPConn::unsetRawBufferCallback() {
+  rawbuf->unsetCallback();
+}
+
+const std::list<std::string> & FTPConn::getXDUPEList() const {
+  return xdupelist;
 }

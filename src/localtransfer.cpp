@@ -1,18 +1,19 @@
 #include "localtransfer.h"
 
-#include <stdio.h>
-#include <errno.h>
+#include <cstdio>
+#include <cerrno>
 
 #include "core/iomanager.h"
 #include "core/tickpoke.h"
+#include "core/util.h"
 #include "globalcontext.h"
 #include "transfermonitor.h"
-
-extern GlobalContext * global;
+#include "filesystem.h"
 
 LocalTransfer::LocalTransfer() :
-  inuse(false),
-  buflen(0)
+  buflen(0),
+  timeoutticker(false),
+  inuse(false)
 {
 }
 
@@ -20,32 +21,49 @@ bool LocalTransfer::active() const {
   return inuse;
 }
 
-void LocalTransfer::FDNew(int sockid) {
-  global->getIOManager()->closeSocket(this->sockid);
-  if (!passivemode) {
-    global->getTickPoke()->stopPoke(this, 0);
+void LocalTransfer::FDInterNew(int sockid, int newsockid) {
+  if (sockid != newsockid) {
+    global->getIOManager()->closeSocket(sockid);
+    this->sockid = newsockid;
+    global->getIOManager()->registerTCPServerClientSocket(this, newsockid);
   }
-  this->sockid = sockid;
-  global->getIOManager()->registerTCPServerClientSocket(this, sockid);
-  FDConnected(sockid);
+  if (timeoutticker) {
+    global->getTickPoke()->stopPoke(this, 0);
+    timeoutticker = false;
+  }
+  FDInterConnected(newsockid);
+}
+
+void LocalTransfer::FDInterInfo(int sockid, const std::string& info) {
+  if (this->sockid != -1 && this->sockid != sockid) {
+    return;
+  }
+  tm->localInfo(info);
 }
 
 void LocalTransfer::tick(int) {
   global->getIOManager()->closeSocket(sockid);
-  if (!passivemode) {
-    global->getTickPoke()->stopPoke(this, 0);
-  }
+  global->getTickPoke()->stopPoke(this, 0);
   FDFail(sockid, "Connection timed out");
 }
 
-void LocalTransfer::openFile(bool read) {
-  if (access(path.c_str(), read ? R_OK : (R_OK | W_OK)) < 0) {
-    perror(std::string("There was an error accessing " + path).c_str());
-    exit(1);
+bool LocalTransfer::openFile(bool read) {
+  if (read ? !FileSystem::fileExistsReadable(path) : !FileSystem::fileExistsWritable(path)) {
+    global->getIOManager()->closeSocket(sockid);
+    FDFail(sockid, std::string("Failed to access " + path.toString()).c_str());
+    return false;
   }
   filestream.clear();
-  filestream.open((path + "/" + filename).c_str(), std::ios::binary | (read ? std::ios::in : (std::ios::ate | std::ios::out)));
+  filestream.open((path / filename).toString().c_str(), std::ios::binary | (read ? std::ios::in : (std::ios::ate | std::ios::out)));
+  if (filestream.fail()) {
+    std::string error = Core::util::getStrError(errno);
+    filestream.close();
+    global->getIOManager()->closeSocket(sockid);
+    FDFail(sockid, "Failed to open file " + (path / filename).toString() + ": " + error);
+    return false;
+  }
   fileopened = true;
+  return true;
 }
 
 int LocalTransfer::getPort() const {
@@ -54,4 +72,23 @@ int LocalTransfer::getPort() const {
 
 FTPConn * LocalTransfer::getConn() const {
   return ftpconn;
+}
+
+void LocalTransfer::activate(int localtransferid) {
+  inuse = true;
+  this->localtransferid = localtransferid;
+  timeoutticker = false;
+  if (!passivemode) {
+    global->getTickPoke()->startPoke(this, "LocalTransfer", 5000, 0);
+    timeoutticker = true;
+  }
+}
+
+void LocalTransfer::deactivate() {
+  inuse = false;
+  sockid = -1;
+  if (timeoutticker) {
+    global->getTickPoke()->stopPoke(this, 0);
+    timeoutticker = false;
+  }
 }

@@ -1,12 +1,11 @@
 #pragma once
 
-#include <string>
 #include <map>
+#include <memory>
+#include <string>
 
 #include "../uiwindow.h"
 #include "../menuselectoption.h"
-
-#include "../../core/pointer.h"
 
 class TransferJob;
 class Ui;
@@ -17,25 +16,21 @@ class TransferJobStatusScreen : public UIWindow {
 public:
   TransferJobStatusScreen(Ui *);
   ~TransferJobStatusScreen();
-  void initialize(unsigned int, unsigned int, unsigned int);
-  void redraw();
-  void update();
-  void command(std::string, std::string);
-  bool keyPressed(unsigned int);
-  std::string getLegendText() const;
-  std::string getInfoLabel() const;
-  static std::string getRoute(Pointer<TransferJob>);
+  bool initialize(unsigned int, unsigned int, unsigned int);
+  void redraw() override;
+  void command(const std::string &, const std::string &) override;
+  bool keyPressed(unsigned int) override;
+  std::string getInfoLabel() const override;
+  std::string getLegendText() const override;
+  static std::string getRoute(std::shared_ptr<TransferJob>);
 private:
-  void addTransferDetails(unsigned int, Pointer<TransferStatus>);
-  void addTransferDetails(unsigned int, std::string, std::string, std::string,
-      std::string, std::string, std::string, int);
-  Pointer<TransferJob> transferjob;
+  void addTransferDetails(unsigned int, std::shared_ptr<TransferStatus>);
+  void addTransferDetails(unsigned int, const std::string &, const std::string &, const std::string &,
+      const std::string &, const std::string &, const std::string &, int);
+  int getCurrentScope() const;
+  bool onDeactivated(const std::shared_ptr<MenuSelectOptionElement>& msoe) override;
+  std::shared_ptr<TransferJob> transferjob;
   MenuSelectOption table;
   MenuSelectOption mso;
-  std::map<Pointer<MenuSelectOptionElement>, int> progressmap;
-  bool active;
-  Pointer<MenuSelectOptionElement> activeelement;
-  std::string defaultlegendtext;
-  std::string currentlegendtext;
-  std::string abortedlegendtext;
+  std::map<std::shared_ptr<MenuSelectOptionElement>, int> progressmap;
 };

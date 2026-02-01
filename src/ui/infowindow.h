@@ -1,23 +1,19 @@
 #pragma once
 
-#include <string>
+#include "fmtstring.h"
 
 #include "uiwindow.h"
 
-struct _win_st;
-typedef struct _win_st WINDOW;
-
 class InfoWindow : public UIWindow {
 public:
-  InfoWindow(Ui *, WINDOW *, int, int);
+  InfoWindow(Ui* ui, unsigned int row, unsigned int col);
   void redraw();
   void update();
-  void setLabel(std::string);
-  void setText(std::string);
-  void setSplit(bool);
+  void setLabel(const FmtString& label);
+  void setText(const FmtString& text);
+  void setSplit(bool split);
 private:
-  std::string label;
-  std::string text;
+  FmtString label;
+  FmtString text;
   bool split;
-  WINDOW * window;
 };

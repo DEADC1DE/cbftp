@@ -5,7 +5,7 @@ MenuSelectOptionCheckBox::MenuSelectOptionCheckBox(std::string identifier, int r
   init(identifier, row, col, label);
 }
 
-std::string MenuSelectOptionCheckBox::getContentText() const {
+FmtString MenuSelectOptionCheckBox::getContentText() const {
   if (value) {
     return "[X]";
   }
@@ -20,6 +20,10 @@ bool MenuSelectOptionCheckBox::activate() {
     value = true;
   }
   return false;
+}
+
+void MenuSelectOptionCheckBox::setValue(bool value) {
+  this->value = value;
 }
 
 bool MenuSelectOptionCheckBox::getData() const {

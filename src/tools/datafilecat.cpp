@@ -1,51 +1,68 @@
-#include "datafilecat.h"
+#include <iostream>
+#include <cstring>
+#include <string>
+#include <cstdlib>
+
+#include "datafiletoolfuncs.h"
+#include "../crypto.h"
+#include "../datafilehandlermethod.h"
+#include "../filesystem.h"
+#include "../path.h"
+
+int usage() {
+  std::cerr << "datafilecat: decrypts the content of a cbftp data file.\n\n"
+            << "Usage: datafilecat [--infile=] [--outfile=]"
+            << std::endl;
+  return 0;
+}
 
 int main(int argc, char ** argv) {
-  if (argc < 3) {
-    std::cout << "datafilecat: decrypts and prints the decrypted content of a cbftp data file.\n\nUsage: datafilecat <file> <crypto key>" << std::endl;
-    return 0;
+  Path path = DataFileHandlerMethod::getDataFile();
+  bool useoutfile = false;
+  std::string outfile;
+  for (int i = 1; i < argc; i++) {
+    if (!strncmp(argv[i], "--infile=", 9)) {
+      path = argv[i] + 9;
+    }
+    else if (!strncmp(argv[i], "--outfile=", 10)) {
+      useoutfile = true;
+      outfile = argv[i] + 10;
+    }
+    else {
+      return usage();
+    }
   }
-  char * path = argv[1];
-  std::string key = std::string(argv[2]);
-  if (access(path, F_OK) < 0) {
-    std::cout << "Error: The input file does not exist." << std::endl;
-    return -1;
+
+
+  if (!checkInputFile(path)) return -1;
+  std::cerr << "Using data file: " << path.toString() << std::endl;
+
+
+  Core::BinaryData rawdata;
+  FileSystem::readFile(path, rawdata);
+
+  Core::BinaryData decryptedtext;
+
+  if (!Crypto::isMostlyASCII(rawdata)) {
+    Core::BinaryData key = getPassphrase();
+    if (!DataFileHandlerMethod::decrypt(rawdata, key, decryptedtext)) {
+      std::cerr << "Error: Either the passphrase is wrong, or the input file is"
+                << " not a valid cbftp data file."
+                << std::endl;
+      return -1;
+    }
   }
-  if (access(path, R_OK) < 0) {
-    std::cout << "Error: Could not read the input file." << std::endl;
-    return -1;
+  else {
+    decryptedtext = rawdata;
   }
-  std::fstream infile;
-  std::vector<unsigned char *> rawdatablocks;
-  infile.open(path);
-  int gcount;
-  while (!infile.eof() && infile.good()) {
-    unsigned char * rawdatablock = new unsigned char[READBLOCKSIZE];
-    rawdatablocks.push_back(rawdatablock);
-    infile.read((char *)rawdatablock, READBLOCKSIZE);
-    gcount = infile.gcount();
+
+  if (useoutfile) {
+    FileSystem::writeFile(outfile, decryptedtext);
   }
-  infile.close();
-  int rawdatalen = ((rawdatablocks.size() - 1) * READBLOCKSIZE) + gcount;
-  int rawdatasize = rawdatablocks.size() * READBLOCKSIZE;
-  unsigned char * rawdata = new unsigned char[rawdatasize];
-  std::vector<unsigned char *>::iterator it;
-  int count = 0;
-  for (it = rawdatablocks.begin(); it != rawdatablocks.end(); it++) {
-    memcpy(rawdata + (count++ * READBLOCKSIZE), *it, READBLOCKSIZE);
-    delete *it;
+  else {
+    std::cout << std::string((const char *)&decryptedtext[0],
+                             decryptedtext.size());
+    std::cerr << std::endl;
   }
-  unsigned char decryptedtext[rawdatalen + Crypto::blocksize()];
-  int decryptedlen;
-  unsigned char keyhash[32];
-  Crypto::sha256(key, keyhash);
-  Crypto::decrypt(rawdata, rawdatalen, keyhash, decryptedtext, &decryptedlen);
-  decryptedtext[decryptedlen] = '\0';
-  delete[] rawdata;
-  if (strstr((const char *)decryptedtext, std::string("DataFileHandler.readable").data()) == NULL) {
-    std::cout << "Error: Either the key is wrong, or the indata file is not a valid cbftp data file." << std::endl;
-    return -1;
-  }
-  std::cout << decryptedtext << std::endl;
   return 0;
 }

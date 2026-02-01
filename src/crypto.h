@@ -1,14 +1,18 @@
 #pragma once
 
-#include <openssl/evp.h>
 #include <string>
 
+#include "core/types.h"
+
 class Crypto {
-private:
-  static const EVP_CIPHER * cipher();
 public:
-  static int blocksize();
-  static void encrypt(unsigned char *, int, unsigned char *, unsigned char *, int *);
-  static void decrypt(unsigned char *, int, unsigned char *, unsigned char *, int *);
-  static void sha256(const std::string &, unsigned char *);
+  static void encrypt(const Core::BinaryData& indata, const Core::BinaryData& pass, Core::BinaryData& outdata);
+  static void decrypt(const Core::BinaryData& indata, const Core::BinaryData& pass, Core::BinaryData& outdata);
+  static void decryptOld(const Core::BinaryData& indata, const Core::BinaryData& pass, Core::BinaryData& outdata);
+  static void sha256(const Core::BinaryData& indata, Core::BinaryData& outdata);
+  static void base64Encode(const Core::BinaryData& indata, Core::BinaryData& outdata);
+  static void base64Decode(const Core::BinaryData& indata, Core::BinaryData& outdata);
+  static bool isMostlyASCII(const Core::BinaryData& data);
+  static std::string toHex(const Core::BinaryData& indata);
+  static void fromHex(const std::string& indata, Core::BinaryData& outdata);
 };

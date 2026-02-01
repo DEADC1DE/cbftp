@@ -12,20 +12,15 @@ public:
   EditProxyScreen(Ui *);
   ~EditProxyScreen();
   void initialize(unsigned int, unsigned int, std::string, std::string);
-  void update();
-  void redraw();
-  bool keyPressed(unsigned int);
-  std::string getLegendText() const;
-  std::string getInfoLabel() const;
+  void redraw() override;
+  bool keyPressed(unsigned int) override;
+  std::string getInfoLabel() const override;
 private:
-  std::string currentlegendtext;
-  std::string defaultlegendtext;
-  bool active;
-  Pointer<MenuSelectOptionElement> activeelement;
   MenuSelectOption mso;
   Proxy * proxy;
   Proxy modproxy;
-  Pointer<MenuSelectOptionTextArrow> authmethod;
+  std::shared_ptr<MenuSelectOptionTextArrow> authmethod;
+  std::shared_ptr<MenuSelectOptionTextArrow> ampm;
   int latestauthmethod;
   std::string operation;
 };

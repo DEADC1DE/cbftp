@@ -1,76 +1,57 @@
 #pragma once
 
+#include <list>
+#include <map>
+#include <memory>
 #include <string>
 #include <vector>
-#include <map>
-#include <list>
 
-class Site;
-
-#define DEFAULTUSERNAME "anonymous"
-#define DEFAULTPASSWORD "anonymous"
-#define DEFAULTMAXLOGINS 3
-#define DEFAULTMAXUP 0
-#define DEFAULTMAXDOWN 2
-#define DEFAULTMAXIDLETIME 60
-#define DEFAULTSSL true
-#define DEFAULTSSLTRANSFER SITE_SSL_PREFER_OFF
-#define DEFAULTGLOBALRANK (SITE_RANK_MAX / 2)
-#define DEFAULTGLOBALRANKTOLERANCE DEFAULTGLOBALRANK  // Allow all pairings by default
+#include "site.h"
 
 class SiteManager {
   private:
-    std::vector<Site *> sites;
-    std::map<Site *, std::map<Site *, bool> > blockedpairs;
+    void purgeSite(const std::shared_ptr<Site>& site);
+    std::vector<std::shared_ptr<Site> > sites;
     std::string defaultusername;
     std::string defaultpassword;
-    unsigned int defaultmaxlogins;
-    unsigned int defaultmaxup;
-    unsigned int defaultmaxdown;
+    int defaultmaxlogins;
+    int defaultmaxup;
+    int defaultmaxdown;
     unsigned int defaultmaxidletime;
     int defaultssltransfer;
-    bool defaultsslconn;
-    int globalrank;
-    int globalranktolerance;
+    TLSMode defaulttlsmode;
   public:
     SiteManager();
     int getNumSites() const;
-    void addSite(Site *);
-    void addSiteLoad(Site *);
-    Site * getSite(std::string) const;
-    void deleteSite(std::string);
-    std::vector<Site *>::const_iterator begin() const;
-    std::vector<Site *>::const_iterator end() const;
+    std::shared_ptr<Site> createNewSite() const;
+    void addSite(const std::shared_ptr<Site> &);
+    void addSiteLoad(const std::shared_ptr<Site> &);
+    std::shared_ptr<Site> getSite(const std::string &) const;
+    std::shared_ptr<Site> getSite(unsigned int) const;
+    void deleteSite(const std::string &);
+    std::vector<std::shared_ptr<Site> >::const_iterator begin() const;
+    std::vector<std::shared_ptr<Site> >::const_iterator end() const;
     std::string getDefaultUserName() const;
-    void setDefaultUserName(std::string);
+    void setDefaultUserName(const std::string &);
     std::string getDefaultPassword() const;
-    void setDefaultPassword(std::string);
-    unsigned int getDefaultMaxLogins() const;
-    void setDefaultMaxLogins(unsigned int);
-    unsigned int getDefaultMaxUp() const;
-    void setDefaultMaxUp(unsigned int);
-    unsigned int getDefaultMaxDown() const;
-    void setDefaultMaxDown(unsigned int);
+    void setDefaultPassword(const std::string &);
+    int getDefaultMaxLogins() const;
+    void setDefaultMaxLogins(int maxlogins);
+    int getDefaultMaxUp() const;
+    void setDefaultMaxUp(int maxup);
+    int getDefaultMaxDown() const;
+    void setDefaultMaxDown(int maxdown);
     unsigned int getDefaultMaxIdleTime() const;
     void setDefaultMaxIdleTime(unsigned int);
-    bool getDefaultSSL() const;
-    void setDefaultSSL(bool);
+    TLSMode getDefaultTLSMode() const;
+    void setDefaultTLSMode(TLSMode mode);
     int getDefaultSSLTransferPolicy() const;
     void setDefaultSSLTransferPolicy(int);
-    int getGlobalRank() const;
-    void setGlobalRank(int);
-    int getGlobalRankTolerance() const;
-    void setGlobalRankTolerance(int);
     void sortSites();
-    void proxyRemoved(std::string);
-    void addBlockedPair(std::string, std::string);
-    bool isBlockedPair(Site *, Site *) const;
-    void clearBlocksForSite(Site *);
-    std::list<Site *> getBlocksFromSite(Site *) const;
-    std::list<Site *> getBlocksToSite(Site *) const;
-    std::map<Site *, std::map<Site *, bool> >::const_iterator blockedPairsBegin() const;
-    std::map<Site *, std::map<Site *, bool> >::const_iterator blockedPairsEnd() const;
-    bool testRankCompatibility(const Site&, const Site&) const;
+    void proxyRemoved(const std::string &);
+    void resetSitePairsForSite(const std::string &);
+    void addExceptSourceForSite(const std::string &, const std::string &);
+    void addExceptTargetForSite(const std::string &, const std::string &);
+    void resetHourlyStats();
+    void resetAllStats();
 };
-
-bool siteNameComparator(Site *, Site *);

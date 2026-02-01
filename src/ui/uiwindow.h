@@ -1,29 +1,50 @@
 #pragma once
 
 #include <string>
+#include <list>
+#include <memory>
 
+#include "keybinds.h"
+
+class MenuSelectOptionElement;
 class Ui;
+class VirtualView;
 
 class UIWindow {
 protected:
+  bool isTop() const;
+  virtual bool onDeactivated(const std::shared_ptr<MenuSelectOptionElement>& msoe);
+  virtual void onKeyPressedActive(unsigned int key);
+  std::string name;
   unsigned int row;
   unsigned int col;
   bool autoupdate;
   bool expectbackendpush;
   Ui * ui;
+  VirtualView* vv;
+  KeyBinds keybinds;
+  bool allowimplicitgokeybinds;
+  bool active;
+  std::shared_ptr<MenuSelectOptionElement> activeelement;
 public:
-  void init(unsigned int, unsigned int);
-  UIWindow();
+  void init(unsigned int row, unsigned int col);
+  UIWindow(Ui* ui, const std::string& name);
   virtual ~UIWindow();
   virtual void redraw() = 0;
-  void resize(unsigned int, unsigned int);
+  void resize(unsigned int row, unsigned int col);
   virtual void update();
-  virtual void command(std::string);
-  virtual void command(std::string, std::string);
+  virtual void command(const std::string& command);
+  virtual void command(const std::string& command, const std::string& arg);
   virtual std::string getInfoLabel() const;
   virtual std::string getInfoText() const;
   virtual std::string getLegendText() const;
+  virtual std::basic_string<char32_t> getWideInfoLabel() const;
+  virtual std::basic_string<char32_t> getWideInfoText() const;
+  virtual std::basic_string<char32_t> getWideLegendText() const;
+  bool keyPressedBase(unsigned int);
   virtual bool keyPressed(unsigned int);
   bool autoUpdate() const;
   bool expectBackendPush() const;
+  virtual bool keyUp();
+  virtual bool keyDown();
 };

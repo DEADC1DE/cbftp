@@ -1,6 +1,6 @@
 #include "menuselectoptionelement.h"
 
-void MenuSelectOptionElement::init(std::string identifier, int row, int col, std::string label) {
+void MenuSelectOptionElement::init(const std::string& identifier, int row, int col, const std::string& label) {
   this->identifier = identifier;
   this->row = row;
   this->col = col;
@@ -8,6 +8,8 @@ void MenuSelectOptionElement::init(std::string identifier, int row, int col, std
   active = false;
   shown = true;
   selectable = true;
+  id = 0;
+  origin = nullptr;
 }
 
 MenuSelectOptionElement::~MenuSelectOptionElement() {
@@ -19,7 +21,7 @@ void MenuSelectOptionElement::setPosition(int row, int col) {
   this->col = col;
 }
 
-std::string MenuSelectOptionElement::getLabelText() const {
+FmtString MenuSelectOptionElement::getLabelText() const {
   return label;
 }
 
@@ -29,6 +31,14 @@ std::string MenuSelectOptionElement::getIdentifier() const {
 
 unsigned int MenuSelectOptionElement::getId() const {
   return id;
+}
+
+std::string MenuSelectOptionElement::getExtraData() const {
+  return extradata;
+}
+
+unsigned int MenuSelectOptionElement::getTotalWidth() const {
+  return getLabelText().length() + 1 + getContentText().length();
 }
 
 bool MenuSelectOptionElement::activate() {
@@ -60,8 +70,8 @@ int MenuSelectOptionElement::cursorPosition() const {
   return -1;
 }
 
-void MenuSelectOptionElement::inputChar(int ch) {
-
+bool MenuSelectOptionElement::inputChar(int ch) {
+  return false;
 }
 
 void MenuSelectOptionElement::hide() {
@@ -86,4 +96,20 @@ void MenuSelectOptionElement::setSelectable(bool selectable) {
 
 void MenuSelectOptionElement::setId(unsigned int id) {
   this->id = id;
+}
+
+void MenuSelectOptionElement::setExtraData(const std::string& data) {
+  extradata = data;
+}
+
+void MenuSelectOptionElement::setLabel(const std::string& label) {
+  this->label = label;
+}
+
+void * MenuSelectOptionElement::getOrigin() const {
+  return origin;
+}
+
+void MenuSelectOptionElement::setOrigin(void* origin) {
+  this->origin = origin;
 }

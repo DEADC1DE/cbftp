@@ -1,15 +1,11 @@
 #pragma once
 
 #include <list>
-
-#include "../../core/pointer.h"
-#include "../../site.h"
+#include <memory>
 
 #include "../uiwindow.h"
 #include "../menuselectoption.h"
-#include "../menusection.h"
 
-class FocusableArea;
 class Site;
 class MenuSelectOptionElement;
 
@@ -17,24 +13,16 @@ class EditSiteScreen : public UIWindow {
 public:
   EditSiteScreen(Ui * ui);
   ~EditSiteScreen();
-  void initialize(unsigned int, unsigned int, std::string, std::string);
-  void update();
-  void redraw();
-  void command(std::string, std::string);
-  bool keyPressed(unsigned int);
-  std::string getLegendText() const;
-  std::string getInfoLabel() const;
+  void initialize(unsigned int row, unsigned int col, const std::string & operation, const std::string & site);
+  void redraw() override;
+  void command(const std::string & command, const std::string & arg) override;
+  bool keyPressed(unsigned int ch) override;
+  std::string getInfoLabel() const override;
 private:
-  void fillPreselectionList(std::string, std::list<Site *> *) const;
-  FocusableArea * focusedarea;
-  FocusableArea * defocusedarea;
-  std::string currentlegendtext;
-  std::string defaultlegendtext;
-  bool active;
-  Pointer<MenuSelectOptionElement> activeelement;
+  void fillPreselectionList(const std::string &, std::list<std::shared_ptr<Site> > *) const;
   MenuSelectOption mso;
-  MenuSection ms;
-  Site * site;
-  Site modsite;
+  std::shared_ptr<Site> site;
+  std::shared_ptr<Site> modsite;
   std::string operation;
+  bool slotsupdated;
 };

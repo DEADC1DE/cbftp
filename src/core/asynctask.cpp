@@ -1,40 +1,48 @@
 #include "asynctask.h"
 
-AsyncTask::AsyncTask(EventReceiver * er, int type, void (*taskfunction)(EventReceiver *, int), int data) :
-  receiver(er), type(type), taskfunction(taskfunction), dataispointer(false), data(data)
+namespace Core {
+
+AsyncTask::AsyncTask(EventReceiver* er, int type, void (*taskfunction)(EventReceiver*, int), int data) :
+  receiver(er), type(type), taskfunction(taskfunction), taskfunctionp(nullptr), data(data), datap(nullptr)
 {
 }
 
-AsyncTask::AsyncTask(EventReceiver * er, int type, void (*taskfunction)(EventReceiver *, void *), void * data) :
-  receiver(er), type(type), taskfunctionp(taskfunction), dataispointer(true), datap(data)
+AsyncTask::AsyncTask(EventReceiver* er, int type, void (*taskfunction)(EventReceiver*, void*), void* data) :
+  receiver(er), type(type), taskfunction(nullptr), taskfunctionp(taskfunction), data(0), datap(data)
 {
 }
 
-void AsyncTask::execute() {
-  if (dataispointer) {
+bool AsyncTask::execute() {
+  if (taskfunctionp) {
     taskfunctionp(receiver, datap);
   }
-  else {
+  else if (taskfunction) {
     taskfunction(receiver, data);
   }
+  else {
+    return false;
+  }
+  return true;
 }
 
-EventReceiver * AsyncTask::getReceiver() const {
+EventReceiver* AsyncTask::getReceiver() const {
   return receiver;
 }
 
 bool AsyncTask::dataIsPointer() const {
-  return dataispointer;
+  return taskfunctionp;
 }
 
 int AsyncTask::getType() const {
   return type;
 }
 
-void * AsyncTask::getData() const {
+void* AsyncTask::getData() const {
   return datap;
 }
 
 int AsyncTask::getNumData() const {
   return data;
 }
+
+} // namespace Core

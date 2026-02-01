@@ -2,7 +2,7 @@
 
 #include "menuselectoptionelement.h"
 
-#include <stdlib.h>
+#include <cstdlib>
 
 FocusableArea::FocusableArea() {
   focus = false;
@@ -22,6 +22,10 @@ bool FocusableArea::isFocused() const {
 
 void FocusableArea::enterFocusFrom(int direction) {
   focus = true;
+}
+
+void FocusableArea::defocus() {
+  focus = false;
 }
 
 bool FocusableArea::goUp() {
@@ -87,6 +91,6 @@ bool FocusableArea::activateSelected() {
   return false;
 }
 
-Pointer<MenuSelectOptionElement> FocusableArea::getElement(unsigned int i) const {
-  return Pointer<MenuSelectOptionElement>();
+std::shared_ptr<MenuSelectOptionElement> FocusableArea::getElement(unsigned int i) const {
+  return std::shared_ptr<MenuSelectOptionElement>();
 }

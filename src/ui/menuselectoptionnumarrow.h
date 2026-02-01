@@ -8,12 +8,16 @@
 class MenuSelectOptionNumArrow : public MenuSelectOptionElement {
 private:
   NumInputArrow arrow;
+  int lastvalue;
 public:
   MenuSelectOptionNumArrow(std::string, int, int, std::string, int, int, int);
-  std::string getContentText() const;
-  void inputChar(int);
-  bool activate();
-  void deactivate();
+  FmtString getContentText() const override;
+  bool inputChar(int ch) override;
+  bool activate() override;
+  void deactivate() override;
   int getData() const;
-  std::string getLegendText() const;
+  bool isActive() const override;
+  void setData(int value);
+  std::string getLegendText() const override;
+  void setSubstituteText(int value, const std::string & text);
 };

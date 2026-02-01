@@ -2,14 +2,20 @@
 
 #include "core/eventreceiver.h"
 
-class TimeReference : public EventReceiver {
+class TimeReference : public Core::EventReceiver {
 public:
   TimeReference();
   void tick(int);
-  unsigned long long timeReference();
-  unsigned long long timePassedSince(unsigned long long);
+  unsigned long long timeReference() const;
+  unsigned long long timePassedSince(unsigned long long) const;
+  std::string getCurrentFullTimeStamp() const;
+  std::string getCurrentLogTimeStamp() const;
+  bool getLogTimeStampMilliseconds() const;
+  void setLogTimeStampMilliseconds(bool ms);
 private:
+  std::string getCurrentTimeStamp(bool includedate) const;
   unsigned long long timeticker;
+  bool logtimestampms;
 
 public:
   static void updateTime();

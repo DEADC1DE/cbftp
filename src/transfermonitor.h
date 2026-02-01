@@ -1,9 +1,12 @@
 #pragma once
 
+#include <memory>
 #include <string>
+#include <utility>
 
 #include "core/eventreceiver.h"
-#include "core/pointer.h"
+#include "rawbuffercallback.h"
+#include "path.h"
 
 enum TransferMonitorType {
  TM_TYPE_FXP,
@@ -29,14 +32,12 @@ enum TransferError {
   TM_ERR_RETRSTOR_COMPLETE,
   TM_ERR_OTHER,
   TM_ERR_LOCK_DOWN,
-  TM_ERR_LOCK_UP
+  TM_ERR_LOCK_UP,
+  TM_ERR_DUPE,
+  TM_ERR_CLEANUP
 };
 
-#define MAX_WAIT_ERROR 10000
-#define MAX_WAIT_SOURCE_COMPLETE 60000
-
-#define TICKINTERVAL 50
-
+class CommandOwner;
 class SiteLogic;
 class FileList;
 class TransferManager;
@@ -44,59 +45,87 @@ class TransferStatus;
 class LocalTransfer;
 class LocalFileList;
 
-class TransferMonitor : public EventReceiver {
+class TransferMonitor : public Core::EventReceiver, public RawBufferCallback {
   private:
+    int transferid;
     Status status;
     std::string sfile;
     std::string dfile;
     int src;
     int dst;
     int storeid;
-    SiteLogic * sls;
-    SiteLogic * sld;
-    FileList * fls;
-    FileList * fld;
-    Pointer<LocalFileList> localfl;
-    std::string spath;
-    std::string dpath;
+    std::shared_ptr<SiteLogic> sls;
+    std::shared_ptr<SiteLogic> sld;
+    std::shared_ptr<FileList> fls;
+    std::shared_ptr<FileList> fld;
+    std::shared_ptr<LocalFileList> localfl;
+    Path spath;
+    Path dpath;
     bool clientactive;
     bool fxpdstactive;
     bool ssl;
+    bool sourcesslclient;
+    bool ipv6;
     TransferMonitorType type;
     int timestamp;
     int startstamp;
     int partialcompletestamp;
     TransferManager * tm;
-    Pointer<TransferStatus> ts;
-    int latesttouch;
+    std::shared_ptr<TransferStatus> ts;
+    int latestsrctouch;
+    int latestdsttouch;
     bool hiddenfiles;
     LocalTransfer * lt;
-    int localtransferspeedticker;
-    int checkdeadticker;
-    void finish(bool);
+    int ticker;
+    TransferError error;
+    std::list<std::pair<std::string, std::string> > rawbufqueue;
+    std::shared_ptr<CommandOwner> srcco;
+    std::shared_ptr<CommandOwner> dstco;
+    int maxtransfertimeseconds;
+    bool timeout;
+    void finish();
     void setTargetSizeSpeed(unsigned long long int, int);
     void reset();
-    void transferFailed(Pointer<TransferStatus> &, TransferError);
+    void transferFailed(const std::shared_ptr<TransferStatus> &, TransferError);
     void updateFXPSizeSpeed();
     void updateLocalTransferSizeSpeed();
-    void checkForDeadFXPTransfers();
+    bool checkForDeadFXPTransfers();
+    bool checkMaxTransferTime();
     void startClientTransfer();
+    void lateFXPFailure(const std::string& reason);
+    void lateDownloadFailure(const std::string& reason, bool dupe = false);
+    void lateUploadFailure(const std::string& reason, bool dupe = false);
+    void setStatus(Status status);
+    void closeRemainingConnections();
   public:
     TransferMonitor(TransferManager *);
     ~TransferMonitor();
+    int getTransferId() const;
     void tick(int);
     void sourceComplete();
     void targetComplete();
     void sourceError(TransferError);
     void targetError(TransferError);
-    void passiveReady(std::string);
+    void passiveReady(const std::string &, int);
     void activeReady();
     void activeStarted();
+    void sslDetails(const std::string &, bool);
     bool idle() const;
-    Pointer<TransferStatus> getTransferStatus() const;
-    void engageFXP(std::string, SiteLogic *, FileList *, std::string, SiteLogic *, FileList *);
-    void engageDownload(std::string, SiteLogic *, FileList *, Pointer<LocalFileList> &);
-    void engageUpload(std::string, Pointer<LocalFileList> &, SiteLogic *, FileList *);
-    void engageList(SiteLogic *, int, bool);
+    std::shared_ptr<TransferStatus> getTransferStatus() const;
+    void engageFXP(int transferid, const std::string& sfile, const std::shared_ptr<SiteLogic>& sls, const std::shared_ptr<FileList>& fls,
+      const std::string& dfile, const std::shared_ptr<SiteLogic>& sld, const std::shared_ptr<FileList>& fld,
+      const std::shared_ptr<CommandOwner>& srcco, const std::shared_ptr<CommandOwner>& dstco);
+    void engageDownload(int transferid, const std::string& sfile, const std::shared_ptr<SiteLogic>& sls,
+        const std::shared_ptr<FileList>& fls, const std::shared_ptr<LocalFileList>& localfl,
+        const std::shared_ptr<CommandOwner>& co = nullptr, int connid = -1);
+    void engageUpload(int transferid, const std::string& sfile, const std::shared_ptr<LocalFileList>& localfl,
+      const std::shared_ptr<SiteLogic>& sld, const std::shared_ptr<FileList>& fld, const std::shared_ptr<CommandOwner>& co);
+    void engageList(int transferid, const std::shared_ptr<SiteLogic>& sls, int connid, bool hiddenfiles, const std::shared_ptr<FileList>& fl,
+        const std::shared_ptr<CommandOwner>& co, bool ipv6);
     Status getStatus() const;
+    bool willFail() const;
+    void newRawBufferLine(const std::pair<std::string, std::string> &);
+    void localInfo(const std::string& info);
+    void localError(const std::string& info);
+    void abortTransfer();
 };

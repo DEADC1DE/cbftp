@@ -1,91 +1,27 @@
 #include "skiplist.h"
 
-#include <stdlib.h>
+#include <cassert>
+#include <cstdlib>
+#include <regex>
 #include <vector>
 
 #include "util.h"
 
-SkipList::SkipList() : defaultallow(true) {
-  addDefaultEntries();
-}
+namespace {
 
-int SkipList::wildcmp(const char *wild, const char *string) const {
-  const char *cp = NULL, *mp = NULL;
-  while ((*string) && (*wild != '*')) {
-    if (*wild != *string && *wild != '?' &&
-        !(*wild >= 65 && *wild <= 90 && *wild + 32 == *string) &&
-        !(*wild >= 97 && *wild <= 122 && *wild - 32 == *string)) {
-      return 0;
-    }
-    wild++;
-    string++;
-  }
-  while (*string) {
-    if (*wild == '*') {
-      if (!*++wild) {
-        return 1;
-      }
-      mp = wild;
-      cp = string+1;
-    } else if (*wild == *string || *wild == '?' ||
-    (*wild >= 65 && *wild <= 90 && *wild + 32 == *string) ||
-    (*wild >= 97 && *wild <= 122 && *wild - 32 == *string)) {
-      wild++;
-      string++;
-    } else {
-      wild = mp;
-      string = cp++;
-    }
-  }
-  while (*wild == '*') {
-    wild++;
-  }
-  return !*wild;
-}
-
-int SkipList::wildcmpCase(const char *wild, const char *string) const {
-  const char *cp = NULL, *mp = NULL;
-  while ((*string) && (*wild != '*')) {
-    if ((*wild != *string) && (*wild != '?')) {
-      return 0;
-    }
-    wild++;
-    string++;
-  }
-  while (*string) {
-    if (*wild == '*') {
-      if (!*++wild) {
-        return 1;
-      }
-      mp = wild;
-      cp = string+1;
-    } else if ((*wild == *string) || (*wild == '?')) {
-      wild++;
-      string++;
-    } else {
-      wild = mp;
-      string = cp++;
-    }
-  }
-  while (*wild == '*') {
-    wild++;
-  }
-  return !*wild;
-}
-
-bool SkipList::fixedSlashCompare(const std::string & wildpattern, const std::string & element, bool casesensitive) const {
+bool fixedSlashCompare(const std::string & wildpattern, const std::string & element, bool casesensitive) {
   size_t wildslashpos = wildpattern.find('/');
   size_t elemslashpos = element.find('/');
   if (wildslashpos != std::string::npos && elemslashpos != std::string::npos) {
     std::string wild = wildpattern.substr(0, wildslashpos);
     std::string elem = element.substr(0, elemslashpos);
     if (!casesensitive) {
-      if (!wildcmp(wild.c_str(), elem.c_str())) {
+      if (!util::wildcmp(wild.c_str(), elem.c_str())) {
         return false;
       }
     }
     else {
-      if (!wildcmpCase(wild.c_str(), elem.c_str())) {
+      if (!util::wildcmpCase(wild.c_str(), elem.c_str())) {
         return false;
       }
     }
@@ -93,10 +29,10 @@ bool SkipList::fixedSlashCompare(const std::string & wildpattern, const std::str
   }
   else if (wildslashpos == std::string::npos && elemslashpos == std::string::npos) {
     if (!casesensitive) {
-      return wildcmp(wildpattern.c_str(), element.c_str());
+      return util::wildcmp(wildpattern.c_str(), element.c_str());
     }
     else {
-      return wildcmpCase(wildpattern.c_str(), element.c_str());
+      return util::wildcmpCase(wildpattern.c_str(), element.c_str());
     }
   }
   else {
@@ -104,18 +40,38 @@ bool SkipList::fixedSlashCompare(const std::string & wildpattern, const std::str
   }
 }
 
-std::string SkipList::createCacheToken(const std::string & pattern, const bool dir, const bool inrace) const {
+std::string createCacheToken(const std::string & pattern, const bool dir, const bool inrace) {
   return pattern + (dir ? "1" : "0") + (inrace ? "1" : "0");
 }
 
-void SkipList::addEntry(std::string pattern, bool file, bool dir, int scope, bool allow) {
-  entries.push_back(SkiplistItem(pattern, file, dir, scope, allow));
-  matchcache.clear();
+}
+
+SkipListMatch::SkipListMatch(SkipListAction action, bool matched, const std::string& matchpattern, const std::string& matchedpath) : action(action), matched(matched), regex(false), matchpattern(matchpattern), matchedpath(matchedpath) {
+
+}
+
+SkipListMatch::SkipListMatch(SkipListAction action, bool matched, const std::string& matchpattern, const std::regex& matchregexpattern, const std::string& matchedpath) : action(action), matched(matched), regex(true), matchpattern(matchpattern), matchregexpattern(matchregexpattern), matchedpath(matchedpath) {
+
+}
+
+SkipList::SkipList(bool adddefault) : globalskip(nullptr) {
+  if (adddefault) {
+    addDefaultEntries();
+  }
+}
+
+SkipList::SkipList(const SkipList * globalskip) : globalskip(globalskip) {
+  assert(globalskip != NULL);
+}
+
+void SkipList::addEntry(bool regex, const std::string & pattern, bool file, bool dir, int scope, SkipListAction action) {
+  entries.push_back(SkiplistItem(regex, pattern, file, dir, scope, action));
+  wipeCache();
 }
 
 void SkipList::clearEntries() {
   entries.clear();
-  matchcache.clear();
+  wipeCache();
 }
 
 std::list<SkiplistItem>::const_iterator SkipList::entriesBegin() const {
@@ -126,63 +82,81 @@ std::list<SkiplistItem>::const_iterator SkipList::entriesEnd() const {
   return entries.end();
 }
 
-bool SkipList::isAllowed(const std::string & element, const bool dir) const {
-  return isAllowed(element, dir, true);
-}
-
-bool SkipList::isAllowed(std::string element, const bool dir, const bool inrace) const {
-  std::string cachetoken = createCacheToken(element, dir, inrace);
-  std::map<std::string, bool>::const_iterator mit = matchcache.find(cachetoken);
-  if (mit != matchcache.end()) {
-    return mit->second;
-  }
-  std::list<SkiplistItem>::const_iterator it;
-  std::list<std::string> elementparts;
-  std::list<std::string>::iterator partsit;
-  elementparts.push_back(element);
-  size_t slashpos;
-  while ((slashpos = element.find('/')) != std::string::npos) {
-    element = element.substr(slashpos + 1);
-    if (element.length()) {
-      elementparts.push_back(element);
-    }
-  }
-  for (partsit = elementparts.begin(); partsit != elementparts.end(); partsit++) {
-    for (it = entries.begin(); it != entries.end(); it++) {
-      if (it->matchScope() == SCOPE_IN_RACE && !inrace) {
-        continue;
+SkipListMatch SkipList::check(const std::string& element, const bool dir, const bool inrace, const SkipList* fallthrough) const {
+  if (!entries.empty()) {
+    std::string cachetoken = createCacheToken(element, dir, inrace);
+    std::unordered_map<std::string, SkipListMatch>::const_iterator mit = matchcache.find(cachetoken);
+    if (mit != matchcache.end()) {
+      if (mit->second.action == SKIPLIST_NONE) {
+        return fallThrough(element, dir, inrace, fallthrough);
       }
-      if ((it->matchDir() && dir) || (it->matchFile() && !dir)) {
-        if (fixedSlashCompare(it->matchPattern(), *partsit, false)) {
-          bool allowed = it->isAllowed();
-          matchcache[cachetoken] = allowed;
-          return allowed;
+      return mit->second;
+    }
+    std::list<SkiplistItem>::const_iterator it;
+    std::list<std::string> elementparts;
+    std::list<std::string>::iterator partsit;
+    elementparts.push_back(element);
+    size_t slashpos;
+    std::string elementmp = element;
+    while ((slashpos = elementmp.find('/')) != std::string::npos) {
+      elementmp = elementmp.substr(slashpos + 1);
+      if (elementmp.length()) {
+        elementparts.push_back(elementmp);
+      }
+    }
+    for (it = entries.begin(); it != entries.end(); it++) {
+      for (partsit = elementparts.begin(); partsit != elementparts.end(); partsit++) {
+        if (it->matchScope() == SCOPE_IN_RACE && !inrace) {
+          continue;
+        }
+        if ((it->matchDir() && dir) || (it->matchFile() && !dir)) {
+          if (!it->matchRegex() && fixedSlashCompare(it->matchPattern(), *partsit, false)) {
+
+            SkipListMatch match(it->getAction(), true, it->matchPattern(), *partsit);
+            matchcache.insert(std::pair<std::string, SkipListMatch>(cachetoken, match));
+            return match;
+          }
+          else if (it->matchRegex() && std::regex_match(*partsit, it->matchRegexPattern())) {
+            SkipListMatch match(it->getAction(), true, it->matchPattern(), it->matchRegexPattern(), *partsit);
+            matchcache.insert(std::pair<std::string, SkipListMatch>(cachetoken, match));
+            return match;
+          }
         }
       }
     }
+    SkipListMatch nomatch(SKIPLIST_NONE, false, "", "");
+    matchcache.insert(std::pair<std::string, SkipListMatch>(cachetoken, nomatch));
   }
-  matchcache[cachetoken] = defaultallow;
-  return defaultallow;
+  return fallThrough(element, dir, inrace, fallthrough);
+
+}
+
+SkipListMatch SkipList::fallThrough(const std::string & element, const bool dir, const bool inrace, const SkipList * fallthrough) const {
+  SkipListMatch match(SKIPLIST_ALLOW, false, "", "");
+  if (fallthrough) {
+    match = fallthrough->check(element, dir, inrace);
+  }
+  else if (globalskip) {
+      match = globalskip->check(element, dir, inrace);
+  }
+  return match;
 }
 
 void SkipList::addDefaultEntries() {
-  entries.push_back(SkiplistItem("* *", true, true, SCOPE_IN_RACE, false));
-  entries.push_back(SkiplistItem("*%*", true, true, SCOPE_IN_RACE, false));
-  entries.push_back(SkiplistItem("*[*", true, true, SCOPE_IN_RACE, false));
-  entries.push_back(SkiplistItem("*]*", true, true, SCOPE_IN_RACE, false));
-  entries.push_back(SkiplistItem("*-missing", true, false, SCOPE_IN_RACE, false));
-  entries.push_back(SkiplistItem("*-offline", true, false, SCOPE_IN_RACE, false));
+  entries.push_back(SkiplistItem(false, "* *", true, true, SCOPE_ALL, SKIPLIST_DENY));
+  entries.push_back(SkiplistItem(false, "*%*", true, true, SCOPE_IN_RACE, SKIPLIST_DENY));
+  entries.push_back(SkiplistItem(false, "*[*", true, true, SCOPE_IN_RACE, SKIPLIST_DENY));
+  entries.push_back(SkiplistItem(false, "*]*", true, true, SCOPE_IN_RACE, SKIPLIST_DENY));
 }
 
 unsigned int SkipList::size() const {
   return entries.size();
 }
 
-bool SkipList::defaultAllow() const {
-  return defaultallow;
+void SkipList::wipeCache() {
+  matchcache.clear();
 }
 
-void SkipList::setDefaultAllow(bool defaultallow) {
-  this->defaultallow = defaultallow;
-  matchcache.clear();
+void SkipList::setGlobalSkip(SkipList * skiplist) {
+  globalskip = skiplist;
 }

@@ -1,29 +1,31 @@
 #pragma once
 
 #include "localtransfer.h"
+#include "address.h"
 
 class LocalStorage;
+class Path;
 
 class LocalDownload : public LocalTransfer {
 public:
-  LocalDownload(LocalStorage *);
-  void engage(TransferMonitor *, const std::string &, const std::string &, const std::string &, int, bool, FTPConn *);
-  bool engage(TransferMonitor *, const std::string &, const std::string &, int, bool, FTPConn *);
-  void engage(TransferMonitor *, int, const std::string &, int, bool, FTPConn *);
-  bool engage(TransferMonitor *, int, int, bool, FTPConn *);
-  void FDConnected(int);
-  void FDDisconnected(int);
-  void FDData(int, char *, unsigned int);
-  void FDSSLSuccess(int);
-  void FDSSLFail(int);
-  void FDFail(int, std::string);
-  unsigned long long int size() const;
+  LocalDownload(LocalStorage* ls);
+  void engage(TransferMonitor* tm, int localtransferid, const Path& path, const std::string& filename, bool ipv6, const std::string& addr, int port, bool ssl, FTPConn* ftpconn);
+  bool engage(TransferMonitor* tm, int localtransferid, const Path& path, const std::string& filename, bool ipv6, bool ssl, FTPConn* ftpconn);
+  void engage(TransferMonitor* tm, int localtransferid, int storeid, bool ipv6, const std::string& addr, int port, bool ssl, FTPConn* ftpconn);
+  bool engage(TransferMonitor* tm, int localtransferid, int storeid, bool ipv6, bool ssl, FTPConn* ftpconn);
+  unsigned long long int size() const override;
   int getStoreId() const;
 private:
-  void init(TransferMonitor *, FTPConn *, const std::string &, const std::string &, bool, int, bool, int, bool);
-  void append(char *, unsigned int);
+  void FDInterConnected(int sockid) override;
+  void FDInterDisconnected(int sockid, Core::DisconnectType reason, const std::string& details) override;
+  void FDInterData(int sockid, char* data, unsigned int len) override;
+  void FDInterListening(int sockid, const Address& addr) override;
+  void FDSSLSuccess(int sockid, const std::string& cipher) override;
+  void FDFail(int sockid, const std::string& error) override;
+  void disconnect() override;
+  void init(TransferMonitor* tm, int localtransferid, FTPConn* ftpconn, const Path& path, const std::string& filename, bool inmemory, int storeid, bool ssl, bool passivemode, int port = 0);
+  void append(char* data, unsigned int datalen);
   int storeid;
   unsigned long long int filesize;
-  unsigned int bufpos;
   LocalStorage * ls;
 };

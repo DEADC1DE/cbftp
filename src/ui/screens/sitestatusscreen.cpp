@@ -8,13 +8,40 @@
 #include "../../ftpconn.h"
 #include "../../connstatetracker.h"
 #include "../../util.h"
+#include "../../hourlyalltracking.h"
 
 #include "../ui.h"
 
-extern GlobalContext * global;
+namespace {
 
-SiteStatusScreen::SiteStatusScreen(Ui * ui) {
-  this->ui = ui;
+enum KeyAction {
+  KEYACTION_RAW_COMMAND,
+  KEYACTION_EDIT_SITE,
+  KEYACTION_FORCE_DISCONNECT_ALL_SLOTS,
+  KEYACTION_DISCONNECT_ALL_SLOTS,
+  KEYACTION_LOGIN_ALL_SLOTS,
+  KEYACTION_RESET_HOURLY,
+  KEYACTION_RESET_ALL,
+  KEYACTION_TRANSFER_JOBS,
+  KEYACTION_SPREAD_JOBS
+};
+
+}
+
+SiteStatusScreen::SiteStatusScreen(Ui* ui) : UIWindow(ui, "SiteStatusScreen") {
+  keybinds.addBind(KEY_RIGHT, KEYACTION_RIGHT, "Raw data screens");
+  keybinds.addBind(10, KEYACTION_BACK_CANCEL, "Return");
+  keybinds.addBind('b', KEYACTION_BROWSE, "Browse");
+  keybinds.addBind('w', KEYACTION_RAW_COMMAND, "Raw command");
+  keybinds.addBind('E', KEYACTION_EDIT_SITE, "Edit site");
+  keybinds.addBind('t', KEYACTION_TRANSFERS, "Transfers");
+  keybinds.addBind('K', KEYACTION_FORCE_DISCONNECT_ALL_SLOTS, "Kill all slots");
+  keybinds.addBind('k', KEYACTION_DISCONNECT_ALL_SLOTS, "Disconnect all slots");
+  keybinds.addBind('L', KEYACTION_LOGIN_ALL_SLOTS, "Login all slots");
+  keybinds.addBind('h', KEYACTION_RESET_HOURLY, "Reset 24-hour stats");
+  keybinds.addBind('R', KEYACTION_RESET_ALL, "Reset all time stats");
+  keybinds.addBind('j', KEYACTION_TRANSFER_JOBS, "Transfer jobs");
+  keybinds.addBind('r', KEYACTION_SPREAD_JOBS, "Spread jobs");
 }
 
 void SiteStatusScreen::initialize(unsigned int row, unsigned int col, std::string sitename) {
@@ -22,35 +49,28 @@ void SiteStatusScreen::initialize(unsigned int row, unsigned int col, std::strin
   site = global->getSiteManager()->getSite(sitename);
   autoupdate = true;
   st = global->getSiteLogicManager()->getSiteLogic(site->getName());
-  for(unsigned int j = 0; j < st->getConns()->size(); j++) {
-    previousstatuslength.push_back(0);
-  }
   init(row, col);
 }
 
 void SiteStatusScreen::redraw() {
-  ui->erase();
+  vv->clear();
   ui->hideCursor();
-  update();
-}
-
-void SiteStatusScreen::update() {
-  std::string loginslots = "Login slots:    " + util::int2Str(st->getCurrLogins());
+  std::string loginslots = "Login slots:    " + std::to_string(st->getCurrLogins());
   if (!site->unlimitedLogins()) {
-    loginslots += "/" + util::int2Str(site->getMaxLogins());
+    loginslots += "/" + std::to_string(site->getMaxLogins());
   }
-  std::string upslots = "Upload slots:   " + util::int2Str(st->getCurrUp());
+  std::string upslots = "Upload slots:   " + std::to_string(st->getCurrUp());
   if (!site->unlimitedUp()) {
-    upslots += "/" + util::int2Str(site->getMaxUp());
+    upslots += "/" + std::to_string(site->getMaxUp());
   }
-  std::string downslots = "Download slots: " + util::int2Str(st->getCurrDown());
+  std::string downslots = "Download slots: " + std::to_string(st->getCurrDown());
   if (!site->unlimitedDown()) {
-    downslots += "/" + util::int2Str(site->getMaxDown());
+    downslots += "/" + std::to_string(site->getMaxDown());
   }
-  ui->printStr(1, 1, loginslots);
-  ui->printStr(2, 1, upslots);
-  ui->printStr(3, 1, downslots);
-  ui->printStr(5, 1, "Login threads:");
+  vv->putStr(1, 1, loginslots);
+  vv->putStr(2, 1, upslots);
+  vv->putStr(3, 1, downslots);
+  vv->putStr(5, 1, "Login threads:");
   int i = 8;
   for(unsigned int j = 0; j < st->getConns()->size(); j++) {
     std::string status = st->getStatus(j);
@@ -60,43 +80,94 @@ void SiteStatusScreen::update() {
         ? "Y" : "N";
     std::string tstate = st->getConnStateTracker(j)->hasFileTransfer()
         ? "Y" : "N";
-    int statuslength = status.length();
-    while (status.length() < previousstatuslength[j]) {
-      status += " ";
-    }
-    previousstatuslength[j] = statuslength;
-    ui->printStr(i++, 1, "#" + util::int2Str((int)j) + " - LL:" + llstate +
+    vv->putStr(i++, 1, "#" + std::to_string((int)j) + " - LL:" + llstate +
         " - HL:" + hlstate + " - T:" + tstate + " - " + status);
   }
+  ++i;
+  unsigned long long int sizeupday = site->getSizeUp().getLast24Hours();
+  unsigned int filesupday = site->getFilesUp().getLast24Hours();
+  unsigned long long int sizeupall = site->getSizeUp().getAll();
+  unsigned int filesupall = site->getFilesUp().getAll();
+  unsigned long long int sizedownday = site->getSizeDown().getLast24Hours();
+  unsigned int filesdownday = site->getFilesDown().getLast24Hours();
+  unsigned long long int sizedownall = site->getSizeDown().getAll();
+  unsigned int filesdownall = site->getFilesDown().getAll();
+  vv->putStr(i++, 1, "Traffic measurements");
+  vv->putStr(i++, 1, "Upload   last 24 hours: " + util::parseSize(sizeupday) + ", " +
+                 std::to_string(filesupday) + " files - All time: " + util::parseSize(sizeupall) + ", " +
+                 std::to_string(filesupall) + " files");
+  vv->putStr(i++, 1, "Download last 24 hours: " + util::parseSize(sizedownday) + ", " +
+                 std::to_string(filesdownday) + " files - All time: " + util::parseSize(sizedownall) + ", " +
+                 std::to_string(filesdownall) + " files");
 }
 
 bool SiteStatusScreen::keyPressed(unsigned int ch) {
-  switch(ch) {
-    case KEY_RIGHT:
+  int action = keybinds.getKeyAction(ch);
+  confirmaction = action;
+  switch(action) {
+    case KEYACTION_RIGHT:
       ui->goRawData(site->getName());
       return true;
-    case 'E':
+    case KEYACTION_EDIT_SITE:
       ui->goEditSite(site->getName());
       return true;
-    case 27: // esc
-    case ' ':
-    case 10:
+    case KEYACTION_BACK_CANCEL:
       ui->returnToLast();
       return true;
-    case 'b':
+    case KEYACTION_BROWSE:
       ui->goBrowse(site->getName());
       return true;
-    case 'w':
+    case KEYACTION_TRANSFERS:
+      ui->goTransfersFilterSite(site->getName());
+      return true;
+    case KEYACTION_RAW_COMMAND:
       ui->goRawCommand(site->getName());
+      return true;
+    case KEYACTION_FORCE_DISCONNECT_ALL_SLOTS:
+      st->disconnectAll(true);
+      return true;
+    case KEYACTION_DISCONNECT_ALL_SLOTS:
+      st->disconnectAll();
+      return true;
+    case KEYACTION_LOGIN_ALL_SLOTS:
+      for(unsigned int j = 0; j < st->getConns()->size(); j++) {
+        st->connectConn(j);
+      }
+      return true;
+    case KEYACTION_RESET_HOURLY:
+      ui->goConfirmation("Do you really wish to reset the 24-hour stats for " + site->getName());
+      return true;
+    case KEYACTION_RESET_ALL:
+      ui->goStrongConfirmation("Do you really wish to reset the all time stats for " + site->getName() + "?");
+      return true;
+    case KEYACTION_TRANSFER_JOBS:
+      ui->goAllTransferJobsFilterSite(site->getName());
+      return true;
+    case KEYACTION_SPREAD_JOBS:
+      ui->goAllSpreadJobsFilterSite(site->getName());
       return true;
   }
   return false;
 }
 
 std::string SiteStatusScreen::getLegendText() const {
-  return "[Right] Raw data screens - [Enter] Return - ra[w] command - [E]dit site";
+  return keybinds.getLegendSummary();
 }
 
 std::string SiteStatusScreen::getInfoLabel() const {
   return "DETAILED STATUS: " + site->getName();
+}
+
+void SiteStatusScreen::command(const std::string& command, const std::string& arg) {
+  if (command == "yes") {
+    switch (confirmaction) {
+      case KEYACTION_RESET_HOURLY:
+        st->getSite()->resetHourlyStats();
+        break;
+      case KEYACTION_RESET_ALL:
+        st->getSite()->resetAllStats();
+        break;
+    }
+  }
+  ui->redraw();
 }

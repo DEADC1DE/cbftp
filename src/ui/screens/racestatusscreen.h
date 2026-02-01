@@ -2,8 +2,7 @@
 
 #include <list>
 #include <map>
-
-#include "../../core/pointer.h"
+#include <memory>
 
 #include "../uiwindow.h"
 #include "../menuselectoption.h"
@@ -14,29 +13,36 @@ class RaceStatusScreen : public UIWindow {
 public:
   RaceStatusScreen(Ui *);
   ~RaceStatusScreen();
-  void initialize(unsigned int, unsigned int, unsigned int);
-  void redraw();
-  void update();
-  void command(std::string, std::string);
-  bool keyPressed(unsigned int);
-  std::string getLegendText() const;
-  std::string getInfoLabel() const;
+  bool initialize(unsigned int, unsigned int, unsigned int);
+  void redraw() override;
+  void update() override;
+  void command(const std::string &, const std::string &) override;
+  bool keyPressed(unsigned int) override;
+  std::string getLegendText() const override;
+  std::string getInfoLabel() const override;
 private:
-  char getFileChar(bool, bool, bool, bool) const;
-  Pointer<Race> race;
+  void deleteFiles(bool);
+  std::list<std::string> getIncompleteSites() const;
+  std::list<std::string> getDownloadOnlySites() const;
+  int getCurrentScope() const;
+  std::shared_ptr<Race> race;
   bool smalldirs;
   bool awaitingremovesite;
+  bool awaitingremovesitedelownfiles;
+  bool awaitingremovesitedelallfiles;
   bool awaitingabort;
-  bool awaitingdelete;
+  bool awaitingdeleteowninc;
+  bool awaitingdeleteownall;
+  bool awaitingremovesitefromallspreadjobs;
   unsigned int currnumsubpaths;
   unsigned int currguessedsize;
+  unsigned int currincomplete;
   unsigned int longestsubpath;
   std::list<std::string> subpaths;
   MenuSelectOption mso;
   std::map<std::string, int> filetagpos;
   std::map<std::string, std::string> filenametags;
   std::string removesite;
-  std::string defaultlegendtext;
-  std::string finishedlegendtext;
   bool finished;
+  int selectsitesmode;
 };

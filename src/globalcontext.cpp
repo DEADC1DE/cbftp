@@ -1,17 +1,32 @@
 #include "globalcontext.h"
 
-void GlobalContext::linkCore(WorkManager * wm, TickPoke * tp, IOManager * iom, Pointer<EventLog> & el) {
+GlobalContext* global = new GlobalContext();
+
+void GlobalContext::linkCore(Core::WorkManager* wm, Core::TickPoke* tp,
+                             Core::IOManager* iom)
+{
   this->wm = wm;
   this->tp = tp;
   this->iom = iom;
+}
+
+void GlobalContext::linkEventLogger(std::shared_ptr<EventLog>& el) {
   this->el = el;
 }
 
-void GlobalContext::linkComponents(SettingsLoaderSaver * sls, Engine * e,
-    UIBase * uib, SiteManager * sm, SiteLogicManager * slm,
-    TransferManager * tm, RemoteCommandHandler * rch,
-    SkipList * sl, ProxyManager * pm, LocalStorage * ls,
-    ExternalFileViewing * efv, TimeReference * tr) {
+void GlobalContext::linkTimeReference(TimeReference* tr) {
+  this->tr = tr;
+}
+
+void GlobalContext::linkComponents(SettingsLoaderSaver* sls, Engine* e,
+    UIBase* uib, SiteManager* sm, SiteLogicManager* slm,
+    TransferManager* tm, RemoteCommandHandler* rch,
+    SkipList* sl, ProxyManager* pm, LocalStorage* ls,
+    Statistics* s,
+    SectionManager* secm, HTTPServer* httpsrv, RestApi* ra,
+    LoadMonitor* lm, ExternalScriptsManager* esm, SubProcessManager* spm,
+    LogManager* logm)
+{
   this->sls = sls;
   this->e = e;
   this->uib = uib;
@@ -22,70 +37,105 @@ void GlobalContext::linkComponents(SettingsLoaderSaver * sls, Engine * e,
   this->sl = sl;
   this->pm = pm;
   this->ls = ls;
-  this->efv = efv;
-  this->tr = tr;
+  this->s = s;
+  this->secm = secm;
+  this->httpsrv = httpsrv;
+  this->ra = ra;
+  this->lm = lm;
+  this->esm = esm;
+  this->spm = spm;
+  this->logm = logm;
 }
 
-Engine * GlobalContext::getEngine() const {
+Engine* GlobalContext::getEngine() const {
   return e;
 }
 
-SettingsLoaderSaver * GlobalContext::getSettingsLoaderSaver() const {
+SettingsLoaderSaver* GlobalContext::getSettingsLoaderSaver() const {
   return sls;
 }
 
-IOManager * GlobalContext::getIOManager() const {
+Core::IOManager* GlobalContext::getIOManager() const {
   return iom;
 }
 
-WorkManager * GlobalContext::getWorkManager() const {
+Core::WorkManager* GlobalContext::getWorkManager() const {
   return wm;
 }
 
-UIBase * GlobalContext::getUIBase() const {
+UIBase* GlobalContext::getUIBase() const {
   return uib;
 }
 
-SiteManager * GlobalContext::getSiteManager() const {
+SiteManager* GlobalContext::getSiteManager() const {
   return sm;
 }
 
-SiteLogicManager * GlobalContext::getSiteLogicManager() const {
+SiteLogicManager* GlobalContext::getSiteLogicManager() const {
   return slm;
 }
 
-TransferManager * GlobalContext::getTransferManager() const {
+TransferManager* GlobalContext::getTransferManager() const {
   return tm;
 }
 
-TickPoke * GlobalContext::getTickPoke() const {
+Core::TickPoke* GlobalContext::getTickPoke() const {
   return tp;
 }
 
-RemoteCommandHandler * GlobalContext::getRemoteCommandHandler() const {
+RemoteCommandHandler* GlobalContext::getRemoteCommandHandler() const {
   return rch;
 }
 
-SkipList * GlobalContext::getSkipList() const {
+SkipList* GlobalContext::getSkipList() const {
   return sl;
 }
 
-Pointer<EventLog> & GlobalContext::getEventLog() {
+std::shared_ptr<EventLog>& GlobalContext::getEventLog() {
   return el;
 }
 
-ProxyManager * GlobalContext::getProxyManager() const {
+ProxyManager* GlobalContext::getProxyManager() const {
   return pm;
 }
 
-LocalStorage * GlobalContext::getLocalStorage() const {
+LocalStorage* GlobalContext::getLocalStorage() const {
   return ls;
 }
 
-ExternalFileViewing * GlobalContext::getExternalFileViewing() const {
-  return efv;
-}
-
-TimeReference * GlobalContext::getTimeReference() const {
+TimeReference* GlobalContext::getTimeReference() const {
   return tr;
 }
+
+Statistics* GlobalContext::getStatistics() const {
+  return s;
+}
+
+SectionManager* GlobalContext::getSectionManager() const {
+  return secm;
+}
+
+HTTPServer* GlobalContext::getHTTPServer() const {
+  return httpsrv;
+}
+
+RestApi* GlobalContext::getRestApi() const {
+  return ra;
+}
+
+LoadMonitor* GlobalContext::getLoadMonitor() const {
+  return lm;
+}
+
+ExternalScriptsManager* GlobalContext::getExternalScriptsManager() const {
+  return esm;
+}
+
+SubProcessManager* GlobalContext::getSubProcessManager() const {
+  return spm;
+}
+
+LogManager* GlobalContext::getLogManager() const {
+  return logm;
+}
+

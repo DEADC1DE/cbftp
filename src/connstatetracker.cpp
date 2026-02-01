@@ -1,10 +1,13 @@
 #include "connstatetracker.h"
 
+#include <cassert>
+
 #include "delayedcommand.h"
 #include "eventlog.h"
+#include "filelist.h"
 #include "recursivecommandlogic.h"
-#include "util.h"
 #include "sitelogicrequest.h"
+#include "siterace.h"
 
 ConnStateTracker::ConnStateTracker() :
   time(0),
@@ -20,23 +23,19 @@ ConnStateTracker::ConnStateTracker() :
   fxp(false),
   listtransfer(false),
   listinitialized(false),
-  recursivelogic(makePointer<RecursiveCommandLogic>()) {
+  quitting(false),
+  handling(false),
+  recursivelogic(std::make_shared<RecursiveCommandLogic>()),
+  refreshtoken(false)
+{
 }
 
 ConnStateTracker::~ConnStateTracker() {
 
 }
 
-void ConnStateTracker::delayedCommand(std::string command, int delay) {
-  delayedCommand(command, delay, NULL);
-}
-
-void ConnStateTracker::delayedCommand(std::string command, int delay, void * arg) {
-  delayedCommand(command, delay, arg, false);
-}
-
-void ConnStateTracker::delayedCommand(std::string command, int delay, void * arg, bool persisting) {
-  delayedcommand.set(command, time + delay, arg, persisting);
+void ConnStateTracker::delayedCommand(const std::string & command, int delay, bool persisting, const std::shared_ptr<CommandOwner> & co) {
+  delayedcommand.set(command, time + delay, co, persisting);
 }
 
 void ConnStateTracker::timePassed(int time) {
@@ -51,17 +50,23 @@ int ConnStateTracker::getTimePassed() const {
   return idletime;
 }
 
-void ConnStateTracker::check(SiteRace * sr) {
-  if (lastchecked == sr) {
-    lastcheckedcount++;
-  }
-  else {
+void ConnStateTracker::check() {
+  lastcheckedcount++;
+}
+
+void ConnStateTracker::setLastChecked(const std::shared_ptr<SiteRace>& sr) {
+  if (lastchecked != sr) {
     lastchecked = sr;
-    lastcheckedcount = 1;
+    lastcheckedcount = 0;
   }
 }
 
-SiteRace * ConnStateTracker::lastChecked() const {
+void ConnStateTracker::resetLastChecked() {
+  lastchecked = nullptr;
+  lastcheckedcount = 0;
+}
+
+const std::shared_ptr<SiteRace> & ConnStateTracker::lastChecked() const {
   return lastchecked;
 }
 
@@ -69,22 +74,33 @@ int ConnStateTracker::checkCount() const {
     return lastcheckedcount;
 }
 
+void ConnStateTracker::purgeSiteRace(const std::shared_ptr<SiteRace>& sr) {
+  if (lastchecked == sr) {
+    lastchecked = NULL;
+    lastcheckedcount = 0;
+  }
+  if (delayedcommand.isActive() && delayedcommand.getCommandOwner() == sr) {
+    delayedcommand.set("handle", 0);
+  }
+}
+
 DelayedCommand & ConnStateTracker::getCommand() {
   return delayedcommand;
 }
 
 void ConnStateTracker::setDisconnected() {
-  util::assert(!transferlocked);
-  util::assert(!listtransfer);
-  util::assert(!transfer);
-  util::assert(!request);
+  assert(!transferlocked);
+  assert(!listtransfer);
+  assert(!transfer);
+  assert(!request);
   loggedin = false;
+  quitting = false;
   delayedcommand.weakReset();
   idletime = 0;
 }
 
 void ConnStateTracker::use() {
-  util::assert(!transferlocked);
+  assert(!transferlocked);
   delayedcommand.reset();
   idletime = 0;
 }
@@ -94,49 +110,52 @@ void ConnStateTracker::resetIdleTime() {
   idletime = 0;
 }
 
-void ConnStateTracker::setTransfer(std::string path, std::string file, bool fxp, bool passive, std::string addr, bool ssl) {
-  util::assert(transferlocked);
-  util::assert(!transfer);
-  util::assert(!request);
-  util::assert(tm);
+void ConnStateTracker::setTransfer(const std::string & file, bool fxp, bool ipv6, bool passive, const std::string & host, int port, bool ssl, bool sslclient) {
+  assert(transferlocked);
+  assert(!transfer);
+  assert(!fxp || !request);
+  assert(tm);
   this->transfer = true;
   this->initialized = false;
-  this->aborted = false;
-  this->path = path;
   this->file = file;
   this->fxp = fxp;
   this->passive = passive;
-  this->addr = addr;
+  this->host = host;
+  this->port = port;
   this->ssl = ssl;
+  this->sslclient = sslclient;
+  this->ipv6 = ipv6;
 }
 
-void ConnStateTracker::setTransfer(std::string path, std::string file, bool fxp, bool ssl) {
-  setTransfer(path, file, fxp, true, "", ssl);
+void ConnStateTracker::setTransfer(const std::string& file, bool fxp, bool ipv6, bool ssl, bool sslclient) {
+  setTransfer(file, fxp, ipv6, true, "", 0, ssl, sslclient);
 }
 
-void ConnStateTracker::setTransfer(std::string path, std::string file, std::string addr, bool ssl) {
-  setTransfer(path, file, false, false, addr, ssl);
+void ConnStateTracker::setTransfer(const std::string& file, bool fxp, bool ipv6, const std::string& host, int port, bool ssl, bool sslclient) {
+  setTransfer(file, fxp, ipv6, false, host, port, ssl, sslclient);
 }
 
-void ConnStateTracker::setList(TransferMonitor * tm, bool listpassive, std::string addr, bool ssl) {
-  util::assert(!transferlocked);
-  util::assert(!listtransfer);
-  util::assert(!transfer);
+void ConnStateTracker::setList(TransferMonitor* tm, bool ipv6, bool listpassive, const std::string& host, int port, bool ssl) {
+  assert(!transferlocked);
+  assert(!listtransfer);
+  assert(!transfer);
   use();
   this->listtransfer = true;
   this->listinitialized = false;
   this->listtm = tm;
   this->listpassive = listpassive;
-  this->listaddr = addr;
+  this->listhost = host;
+  this->listport = port;
   this->listssl = ssl;
+  this->listipv6 = ipv6;
 }
 
-void ConnStateTracker::setList(TransferMonitor * tm, bool ssl) {
-  setList(tm, true, "", ssl);
+void ConnStateTracker::setList(TransferMonitor* tm, bool ipv6, bool ssl) {
+  setList(tm, ipv6, true, "", 0, ssl);
 }
 
-void ConnStateTracker::setList(TransferMonitor * tm, std::string addr, bool ssl) {
-  setList(tm, false, addr, ssl);
+void ConnStateTracker::setList(TransferMonitor* tm, bool ipv6, const std::string & host, int port, bool ssl) {
+  setList(tm, ipv6, false, host, port, ssl);
 }
 
 bool ConnStateTracker::isLoggedIn() const {
@@ -158,11 +177,17 @@ bool ConnStateTracker::hasFileTransfer() const {
 void ConnStateTracker::finishTransfer() {
   if (listtransfer) {
     listtransfer = false;
+    listtm = NULL;
     return;
   }
+  finishFileTransfer();
+}
+
+void ConnStateTracker::finishFileTransfer() {
   transfer = false;
   transferlocked = false;
   tm = NULL;
+  co.reset();
 }
 
 void ConnStateTracker::abortTransfer() {
@@ -183,8 +208,8 @@ TransferMonitor * ConnStateTracker::getTransferMonitor() const {
   return NULL;
 }
 
-std::string ConnStateTracker::getTransferPath() const {
-  return path;
+std::shared_ptr<FileList> ConnStateTracker::getTransferFileList() const {
+  return fl;
 }
 
 std::string ConnStateTracker::getTransferFile() const {
@@ -212,26 +237,54 @@ bool ConnStateTracker::getTransferFXP() const {
   return fxp;
 }
 
-std::string ConnStateTracker::getTransferAddr() const {
+std::string ConnStateTracker::getTransferHost() const {
   if (listtransfer) {
-    return listaddr;
+    return listhost;
   }
-  return addr;
+  return host;
 }
 
-bool ConnStateTracker::getTransferSSL() const{
+int ConnStateTracker::getTransferPort() const {
+  if (listtransfer) {
+    return listport;
+  }
+  return port;
+}
+
+bool ConnStateTracker::getTransferSSL() const {
   if (listtransfer) {
     return listssl;
   }
   return ssl;
 }
 
-void ConnStateTracker::lockForTransfer(TransferMonitor * tm, bool download) {
-  util::assert(!transferlocked);
-  util::assert(!transfer);
-  util::assert(!request);
+bool ConnStateTracker::getTransferIPv6() const {
+  if (listtransfer) {
+    return listipv6;
+  }
+  return ipv6;
+}
+
+bool ConnStateTracker::getTransferSSLClient() const {
+  if (listtransfer) {
+    return false;
+  }
+  return sslclient;
+}
+
+const std::shared_ptr<CommandOwner> & ConnStateTracker::getCommandOwner() const {
+  return co;
+}
+
+void ConnStateTracker::lockForTransfer(TransferMonitor * tm, const std::shared_ptr<FileList>& fl, const std::shared_ptr<CommandOwner> & co, bool download) {
+  assert(!transferlocked);
+  assert(!transfer);
+  assert(download || !request);
   use();
   this->tm = tm;
+  this->fl = fl;
+  this->co = co;
+  aborted = false;
   transferlocked = true;
   type = download ? CST_DOWNLOAD : CST_UPLOAD;
 }
@@ -249,7 +302,7 @@ bool ConnStateTracker::hasRequest() const {
 }
 
 bool ConnStateTracker::isLocked() const {
-  return isListOrTransferLocked() || hasRequest();
+  return isListOrTransferLocked() || hasRequest() || isQuitting();
 }
 
 bool ConnStateTracker::isListOrTransferLocked() const {
@@ -257,22 +310,23 @@ bool ConnStateTracker::isListOrTransferLocked() const {
 }
 
 bool ConnStateTracker::isHardLocked() const {
-  return isTransferLocked() || hasRequest();
+  return isTransferLocked() || hasRequest() || isQuitting();
 }
 
-const Pointer<SiteLogicRequest> & ConnStateTracker::getRequest() const {
+const std::shared_ptr<SiteLogicRequest> & ConnStateTracker::getRequest() const {
   return request;
 }
 
 void ConnStateTracker::setRequest(SiteLogicRequest request) {
-  this->request = makePointer<SiteLogicRequest>(request);
+  assert(!this->request);
+  this->request = std::make_shared<SiteLogicRequest>(request);
 }
 
 void ConnStateTracker::finishRequest() {
   request.reset();
 }
 
-Pointer<RecursiveCommandLogic> ConnStateTracker::getRecursiveLogic() const {
+const std::shared_ptr<RecursiveCommandLogic> & ConnStateTracker::getRecursiveLogic() const {
   return recursivelogic;
 }
 
@@ -290,4 +344,37 @@ void ConnStateTracker::initializeTransfer() {
   else {
     initialized = true;
   }
+}
+
+bool ConnStateTracker::isQuitting() const {
+  return quitting;
+}
+
+void ConnStateTracker::setQuitting() {
+  quitting = true;
+}
+
+bool ConnStateTracker::hasRefreshToken() const {
+  return refreshtoken;
+}
+
+void ConnStateTracker::setRefreshToken() {
+  refreshtoken = true;
+}
+
+void ConnStateTracker::useRefreshTokenFor(const std::string& refreshpath) {
+  refreshtoken = false;
+  lastrefreshpath = refreshpath;
+}
+
+std::string ConnStateTracker::getLastRefreshPath() const {
+  return lastrefreshpath;
+}
+
+bool ConnStateTracker::isHandlingConnection() const {
+  return handling;
+}
+
+void ConnStateTracker::setHandlingConnection(bool handling) {
+  this->handling = handling;
 }

@@ -1,31 +1,22 @@
 #include "loginscreen.h"
 
 #include <cstdlib>
+#include <ctime>
 
 #include "../termint.h"
 #include "../ui.h"
 #include "../chardraw.h"
 
-#ifndef BOXTAG
-#define BOXTAG ""
-#endif
+#include "../../buildinfo.h"
 
-#ifndef VERSION
-#define VERSION "unknown"
-#endif
-
-#ifndef BUILDTIME
-#define BUILDTIME "unknown"
-#endif
-
-LoginScreen::LoginScreen(Ui * ui) {
-  this->ui = ui;
+LoginScreen::LoginScreen(Ui* ui) : UIWindow(ui, "LoginScreen") {
+  allowimplicitgokeybinds = false;
 }
 
 void LoginScreen::initialize(unsigned int row, unsigned int col) {
-  passfield = TextInputField(25, 32, true);
+  passfield = TextInputField(25, 256, true);
   attempt = false;
-  drawword = BOXTAG;
+  drawword = BuildInfo::tag();
   drawx = 0;
   drawy = 0;
   srand(time(NULL));
@@ -33,18 +24,18 @@ void LoginScreen::initialize(unsigned int row, unsigned int col) {
 }
 
 void LoginScreen::redraw() {
-  ui->erase();
+  vv->clear();
   randomizeDrawLocation();
   background.clear();
   for (unsigned int i = 0; i < row; i++) {
     background.push_back(std::vector<int>());
     background[i].resize(col);
   }
-  pass_row = row-2;
-  pass_col = col-27;
+  passrow = row - 2;
+  passcol = col - 27;
   ui->showCursor();
-  std::string svnstring = " cbftp version tag: " + std::string(VERSION) + " ";
-  std::string compilestring = " Compiled: " + std::string(BUILDTIME) + " ";
+  std::string svnstring = " cbftp version tag: " + BuildInfo::version() + " ";
+  std::string compilestring = " Compiled: " + BuildInfo::compileTime() + " ";
   int boxchar = 0;
   for(unsigned int i = 1; i < row; i++) {
     for(unsigned int j = 0; j < col; j++) {
@@ -64,13 +55,13 @@ void LoginScreen::redraw() {
       }
       else boxchar = (i+j)%2==0 ? BOX_CORNER_TL : BOX_CORNER_BR;
       if (boxchar) {
-        ui->printChar(i, j, boxchar);
+        vv->putChar(i, j, boxchar);
         background[i][j] = boxchar;
       }
     }
   }
-  ui->printStr(0, 3, svnstring);
-  ui->printStr(0, col - compilestring.length() - 3, compilestring);
+  vv->putStr(0, 3, svnstring);
+  vv->putStr(0, col - compilestring.length() - 3, compilestring);
   update();
 
 }
@@ -82,9 +73,9 @@ void LoginScreen::update() {
     ui->showCursor();
   }
   int currdrawx = drawx;
-  ui->printStr(pass_row-1, pass_col, passtext);
-  ui->printStr(pass_row, pass_col, passfield.getVisualText());
-  ui->moveCursor(pass_row, pass_col + passfield.getVisualCursorPosition());
+  vv->putStr(passrow - 1, passcol, passtext);
+  vv->putStr(passrow, passcol, passfield.getVisualText());
+  vv->moveCursor(passrow, passcol + passfield.getVisualCursorPosition());
   for (unsigned int drawchar = 0; drawchar < drawword.length(); drawchar++) {
     bool show = passfield.getText().length() > drawchar &&
         passfield.getText().length() - drawchar < drawword.length() + 1;
@@ -94,7 +85,7 @@ void LoginScreen::update() {
         int bgchar = background[drawy + i][currdrawx + j];
         int c = show ? CharDraw::getMixedChar(bgchar, draw[j]) : bgchar;
         if (c) {
-          ui->printChar(drawy + i, currdrawx + j, c);
+          vv->putChar(drawy + i, currdrawx + j, c);
         }
       }
     }
@@ -129,17 +120,28 @@ bool LoginScreen::keyPressed(unsigned int ch) {
         passfield.moveCursorRight();
         break;
       case KEY_DC:
-        if (passfield.moveCursorRight()) {
-          passfield.erase();
-        }
+        passfield.eraseForward();
+        break;
+      case 23:
+        passfield.eraseCursoredWord();
+        break;
+      case 21:
+        passfield.clear();
+        break;
+      case 544:
+        passfield.moveCursorPreviousWord();
+        break;
+      case 559:
+        passfield.moveCursorNextWord();
         break;
       case KEY_ENTER:
       case 10:
       case 13:
         ui->hideCursor();
         attempt = true;
-        ui->key(passfield.getText());
+        std::string pass = passfield.getText();
         passfield.clear();
+        ui->key(pass);
         return true;
     }
   }

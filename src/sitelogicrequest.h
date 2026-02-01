@@ -2,6 +2,8 @@
 
 #include <string>
 
+class RequestCallback;
+
 class SiteLogicRequest {
 private:
   int requestid;
@@ -9,17 +11,23 @@ private:
   int requesttype;
   std::string data;
   std::string data2;
-  int data3;
-  bool care;
+  int numdata;
+  RequestCallback* cb;
+  void* ptrdata;
 public:
-  SiteLogicRequest(int, int, std::string, bool);
-  SiteLogicRequest(int, int, std::string, std::string, int, bool);
-  int requestId() const;
-  int requestType() const;
-  std::string requestData() const;
-  std::string requestData2() const;
-  int requestData3() const;
+  SiteLogicRequest(RequestCallback* cb, int requestid, int requesttype, void* ptrdata);
+  SiteLogicRequest(RequestCallback* cb, int requestid, int requesttype, int numdata);
+  SiteLogicRequest(RequestCallback* cb, int requestid, int requesttype, const std::string& data);
+  SiteLogicRequest(RequestCallback* cb, int requestid, int requesttype, const std::string& data, int numdata);
+  SiteLogicRequest(RequestCallback* cb, int requestid, int requesttype, const std::string& data, const std::string& data2);
+  SiteLogicRequest(RequestCallback* cb, int requestid, int requesttype, const std::string& data, const std::string& data2, int numdata);
+  int getId() const;
+  int getType() const;
+  std::string getData() const;
+  std::string getData2() const;
+  int getNumData() const;
   void setConnId(int);
-  int connId() const;
-  bool doesAnyoneCare() const;
+  int getConnId() const;
+  RequestCallback* getCallback() const;
+  void* getPtrData() const;
 };

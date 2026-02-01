@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -9,10 +10,13 @@ class PotentialElement;
 class PotentialListElement {
   private:
     std::vector<PotentialElement *> slots;
+    bool allSlotsUsedForSite(const std::shared_ptr<SiteLogic> &, int) const;
   public:
     PotentialListElement(int);
-    void update(SiteLogic *, int, int, int, std::string);
+    ~PotentialListElement();
+    bool update(const std::shared_ptr<SiteLogic> &, int, int, const std::string &);
     void reset();
     std::vector<PotentialElement *> & getSlotsVector();
-    bool allThreadsUsedForSite(SiteLogic *, int) const;
+    void updateSlots(int);
+
 };

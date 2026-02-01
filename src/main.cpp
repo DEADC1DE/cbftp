@@ -1,11 +1,13 @@
 #include <unistd.h>
-#include <signal.h>
-#include <stdio.h>
+#include <csignal>
+#include <cstdio>
 
 #include "core/workmanager.h"
 #include "core/iomanager.h"
 #include "core/tickpoke.h"
 #include "core/threading.h"
+#include "core/logger.h"
+#include "core/signal.h"
 #include "settingsloadersaver.h"
 #include "sitelogicmanager.h"
 #include "transfermanager.h"
@@ -17,11 +19,16 @@
 #include "eventlog.h"
 #include "proxymanager.h"
 #include "localstorage.h"
-#include "externalfileviewing.h"
 #include "timereference.h"
 #include "uibase.h"
-
-GlobalContext * global;
+#include "statistics.h"
+#include "sectionmanager.h"
+#include "httpserver.h"
+#include "restapi.h"
+#include "loadmonitor.h"
+#include "externalscriptsmanager.h"
+#include "subprocessmanager.h"
+#include "logmanager.h"
 
 namespace {
 
@@ -30,39 +37,50 @@ public:
   Main() {
     TimeReference::updateTime();
 
-    WorkManager * wm = new WorkManager();
-    TickPoke * tp = new TickPoke(wm);
-    IOManager * iom = new IOManager(wm, tp);
+    Core::WorkManager* wm = new Core::WorkManager();
+    Core::TickPoke* tp = new Core::TickPoke(*wm);
+    Core::IOManager* iom = new Core::IOManager(*wm, *tp);
 
-    Pointer<EventLog> el = makePointer<EventLog>();
-    iom->setLogger(el);
+    global->linkCore(wm, tp, iom);
 
-    global = new GlobalContext();
-    global->linkCore(wm, tp, iom, el);
+    TimeReference* tr = new TimeReference();
+    global->linkTimeReference(tr);
 
-    SettingsLoaderSaver * sls = new SettingsLoaderSaver();
-    LocalStorage * ls = new LocalStorage();
-    Engine * e = new Engine();
-    SiteManager * sm = new SiteManager();
-    SiteLogicManager * slm = new SiteLogicManager();
-    TransferManager * tm = new TransferManager();
-    RemoteCommandHandler * rch = new RemoteCommandHandler();
-    SkipList * sl = new SkipList();
-    ProxyManager * pm = new ProxyManager();
-    ExternalFileViewing * efv = new ExternalFileViewing();
-    TimeReference * tr = new TimeReference();
+    std::shared_ptr<EventLog> el = std::make_shared<EventLog>();
+    Core::setLogger(el);
+    global->linkEventLogger(el);
 
-    UIBase * uibase = UIBase::instance();
+    SettingsLoaderSaver* sls = new SettingsLoaderSaver();
+    LocalStorage* ls = new LocalStorage();
+    Engine* e = new Engine();
+    SiteManager* sm = new SiteManager();
+    SiteLogicManager* slm = new SiteLogicManager();
+    TransferManager* tm = new TransferManager();
+    RemoteCommandHandler* rch = new RemoteCommandHandler();
+    SkipList* sl = new SkipList();
+    ProxyManager* pm = new ProxyManager();
+    Statistics* s = new Statistics();
+    SectionManager* secm = new SectionManager();
+    HTTPServer* httprv = new HTTPServer();
+    RestApi* ra = new RestApi();
+    LoadMonitor* lm = new LoadMonitor();
+    ExternalScriptsManager* esm = new ExternalScriptsManager();
+    SubProcessManager* spm = new SubProcessManager();
+    LogManager* logm = new LogManager();
 
-    global->linkComponents(sls, e, uibase, sm, slm, tm, rch, sl, pm, ls, efv, tr);
+    UIBase* uibase = UIBase::instance();
 
-    Threading::setCurrentThreadName("cbftp");
+    global->linkComponents(sls, e, uibase, sm, slm, tm, rch, sl, pm, ls,
+                           s, secm, httprv, ra, lm, esm, spm, logm);
+
+    Core::Threading::setCurrentThreadName("cbftp");
 
     if (!uibase->init()) exit(1);
-    wm->init();
-    iom->init();
+    wm->init("cbftp");
+    iom->init("cbftp");
+    sls->init();
     tp->tickerLoop();
-    global->getExternalFileViewing()->killAll();
+    global->getSubProcessManager()->killAll();
     uibase->kill();
     sls->saveSettings();
   }
@@ -72,16 +90,13 @@ void sighandler(int sig) {
   global->getTickPoke()->breakLoop();
 }
 
-}
+} // namespace
 
-int main(int argc, char * argv[]) {
-  struct sigaction sa;
-  sa.sa_flags = SA_RESTART;
-  sigfillset(&sa.sa_mask);
-  sa.sa_handler = sighandler;
-  sigaction(SIGABRT, &sa, NULL);
-  sigaction(SIGTERM, &sa, NULL);
-  sigaction(SIGINT, &sa, NULL);
+int main(int argc, char* argv[]) {
+  Core::registerSignalHandler(SIGABRT, sighandler);
+  Core::registerSignalHandler(SIGTERM, sighandler);
+  Core::registerSignalHandler(SIGINT, sighandler);
+  Core::registerSignalHandler(SIGQUIT, sighandler);
 
   Main();
 }

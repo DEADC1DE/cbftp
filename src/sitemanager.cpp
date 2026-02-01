@@ -1,52 +1,80 @@
 #include "sitemanager.h"
 
+#include <cassert>
 #include <sstream>
 #include <fstream>
-#include <stdlib.h>
+#include <cstdlib>
 #include <algorithm>
+#include <set>
 
 #include "globalcontext.h"
 #include "connstatetracker.h"
 #include "eventlog.h"
-#include "util.h"
 #include "site.h"
+#include "util.h"
 
-extern GlobalContext * global;
+#define DEFAULTUSERNAME "anonymous"
+#define DEFAULTPASSWORD "anonymous"
+#define DEFAULTMAXLOGINS 3
+#define DEFAULTMAXUP -1
+#define DEFAULTMAXDOWN 2
+#define DEFAULTMAXIDLETIME 60
+#define DEFAULTTLSMODE TLSMode::AUTH_TLS
+#define DEFAULTSSLTRANSFER SITE_SSL_PREFER_OFF
 
-SiteManager::SiteManager() {
-  defaultusername = DEFAULTUSERNAME;
-  defaultpassword = DEFAULTPASSWORD;
-  defaultmaxlogins = DEFAULTMAXLOGINS;
-  defaultmaxup = DEFAULTMAXUP;
-  defaultmaxdown = DEFAULTMAXDOWN;
-  defaultsslconn = DEFAULTSSL;
-  defaultssltransfer = DEFAULTSSLTRANSFER;
-  defaultmaxidletime = DEFAULTMAXIDLETIME;
-  globalrank = DEFAULTGLOBALRANK;
-  globalranktolerance = DEFAULTGLOBALRANKTOLERANCE;
+bool siteNameComparator(const std::shared_ptr<Site> & a, const std::shared_ptr<Site> & b) {
+  return util::naturalComparator()(a->getName(), b->getName());
+}
+
+SiteManager::SiteManager() :
+  defaultusername(DEFAULTUSERNAME),
+  defaultpassword(DEFAULTPASSWORD),
+  defaultmaxlogins(DEFAULTMAXLOGINS),
+  defaultmaxup(DEFAULTMAXUP),
+  defaultmaxdown(DEFAULTMAXDOWN),
+  defaultmaxidletime(DEFAULTMAXIDLETIME),
+  defaultssltransfer(DEFAULTSSLTRANSFER),
+  defaulttlsmode(DEFAULTTLSMODE)
+{
 }
 
 int SiteManager::getNumSites() const {
   return sites.size();
 }
 
-Site * SiteManager::getSite(std::string site) const {
-  std::vector<Site *>::const_iterator it;
+std::shared_ptr<Site> SiteManager::createNewSite() const {
+  std::shared_ptr<Site> site = std::make_shared<Site>("SUNET");
+  site->setUser(getDefaultUserName());
+  site->setPass(getDefaultPassword());
+  site->setMaxLogins(getDefaultMaxLogins());
+  site->setMaxUp(getDefaultMaxUp());
+  site->setMaxDn(getDefaultMaxDown());
+  site->setTLSMode(getDefaultTLSMode());
+  site->setSSLTransferPolicy(getDefaultSSLTransferPolicy());
+  site->setMaxIdleTime(getDefaultMaxIdleTime());
+  return site;
+}
+
+std::shared_ptr<Site> SiteManager::getSite(const std::string & site) const {
+  std::vector<std::shared_ptr<Site> >::const_iterator it;
   for (it = sites.begin(); it != sites.end(); it++) {
     if ((*it)->getName().compare(site) == 0) {
       return *it;
     }
   }
-  return NULL;
+  return std::shared_ptr<Site>();
 }
 
-void SiteManager::deleteSite(std::string site) {
-  std::vector<Site *>::iterator it;
+std::shared_ptr<Site> SiteManager::getSite(unsigned int index) const {
+  assert(index < sites.size());
+  return sites[index];
+}
+
+void SiteManager::deleteSite(const std::string & site) {
+  std::vector<std::shared_ptr<Site> >::iterator it;
   for (it = sites.begin(); it != sites.end(); it++) {
     if ((*it)->getName().compare(site) == 0) {
-      clearBlocksForSite(*it);
-      blockedpairs.erase(*it);
-      delete *it;
+      purgeSite(*it);
       sites.erase(it);
       global->getEventLog()->log("SiteManager", "Site " + site + " deleted.");
       return;
@@ -54,13 +82,20 @@ void SiteManager::deleteSite(std::string site) {
   }
 }
 
-void SiteManager::addSite(Site * site) {
+void SiteManager::addSite(const std::shared_ptr<Site> & site) {
   sites.push_back(site);
+  std::set<std::shared_ptr<Site> >::const_iterator it;
+  for (it = site->exceptSourceSitesBegin(); it != site->exceptSourceSitesEnd(); it++) {
+    addExceptSourceForSite(site->getName(), (*it)->getName());
+  }
+  for (it = site->exceptTargetSitesBegin(); it != site->exceptTargetSitesEnd(); it++) {
+    addExceptTargetForSite(site->getName(), (*it)->getName());
+  }
   global->getEventLog()->log("SiteManager", "Site " + site->getName() + " added.");
   sortSites();
 }
 
-void SiteManager::addSiteLoad(Site * site) {
+void SiteManager::addSiteLoad(const std::shared_ptr<Site> & site) {
   sites.push_back(site);
 }
 
@@ -68,23 +103,19 @@ void SiteManager::sortSites() {
   std::sort(sites.begin(), sites.end(), siteNameComparator);
 }
 
-std::vector<Site *>::const_iterator SiteManager::begin() const {
+std::vector<std::shared_ptr<Site> >::const_iterator SiteManager::begin() const {
   return sites.begin();
 }
 
-std::vector<Site *>::const_iterator SiteManager::end() const {
+std::vector<std::shared_ptr<Site> >::const_iterator SiteManager::end() const {
   return sites.end();
-}
-
-bool siteNameComparator(Site * a, Site * b) {
-  return a->getName().compare(b->getName()) < 0;
 }
 
 std::string SiteManager::getDefaultUserName() const {
   return defaultusername;
 }
 
-void SiteManager::setDefaultUserName(std::string username) {
+void SiteManager::setDefaultUserName(const std::string & username) {
   defaultusername = username;
 }
 
@@ -92,31 +123,31 @@ std::string SiteManager::getDefaultPassword() const {
   return defaultpassword;
 }
 
-void SiteManager::setDefaultPassword(std::string password) {
+void SiteManager::setDefaultPassword(const std::string & password) {
   defaultpassword = password;
 }
 
-unsigned int SiteManager::getDefaultMaxLogins() const {
+int SiteManager::getDefaultMaxLogins() const {
   return defaultmaxlogins;
 }
 
-void SiteManager::setDefaultMaxLogins(unsigned int maxlogins) {
+void SiteManager::setDefaultMaxLogins(int maxlogins) {
   defaultmaxlogins = maxlogins;
 }
 
-unsigned int SiteManager::getDefaultMaxUp() const {
+int SiteManager::getDefaultMaxUp() const {
   return defaultmaxup;
 }
 
-void SiteManager::setDefaultMaxUp(unsigned int maxup) {
+void SiteManager::setDefaultMaxUp(int maxup) {
   defaultmaxup = maxup;
 }
 
-unsigned int SiteManager::getDefaultMaxDown() const {
+int SiteManager::getDefaultMaxDown() const {
   return defaultmaxdown;
 }
 
-void SiteManager::setDefaultMaxDown(unsigned int maxdown) {
+void SiteManager::setDefaultMaxDown(int maxdown) {
   defaultmaxdown = maxdown;
 }
 
@@ -128,12 +159,12 @@ void SiteManager::setDefaultMaxIdleTime(unsigned int idletime) {
   defaultmaxidletime = idletime;
 }
 
-bool SiteManager::getDefaultSSL() const {
-  return defaultsslconn;
+TLSMode SiteManager::getDefaultTLSMode() const {
+  return defaulttlsmode;
 }
 
-void SiteManager::setDefaultSSL(bool ssl) {
-  defaultsslconn = ssl;
+void SiteManager::setDefaultTLSMode(TLSMode mode) {
+  defaulttlsmode = mode;
 }
 
 int SiteManager::getDefaultSSLTransferPolicy() const {
@@ -144,24 +175,8 @@ void SiteManager::setDefaultSSLTransferPolicy(int policy) {
   defaultssltransfer = policy;
 }
 
-int SiteManager::getGlobalRank() const {
-  return globalrank;
-}
-
-void SiteManager::setGlobalRank(int rank) {
-  globalrank = rank;
-}
-
-int SiteManager::getGlobalRankTolerance() const {
-  return globalranktolerance;
-}
-
-void SiteManager::setGlobalRankTolerance(int tolerance) {
-  globalranktolerance = tolerance;
-}
-
-void SiteManager::proxyRemoved(std::string removedproxy) {
-  std::vector<Site *>::iterator it;
+void SiteManager::proxyRemoved(const std::string & removedproxy) {
+  std::vector<std::shared_ptr<Site> >::iterator it;
   for (it = sites.begin(); it != sites.end(); it++) {
     if ((*it)->getProxyType() == SITE_PROXY_USE && (*it)->getProxy() == removedproxy) {
       (*it)->setProxyType(SITE_PROXY_GLOBAL);
@@ -170,84 +185,81 @@ void SiteManager::proxyRemoved(std::string removedproxy) {
   }
 }
 
-void SiteManager::addBlockedPair(std::string sitestr1, std::string sitestr2) {
-  Site * site1 = getSite(sitestr1);
-  Site * site2 = getSite(sitestr2);
-  if (site1 == NULL || site2 == NULL) {
+void SiteManager::purgeSite(const std::shared_ptr<Site>& site) {
+  std::vector<std::shared_ptr<Site> >::iterator it;
+  for (it = sites.begin(); it != sites.end(); it++) {
+    (*it)->purgeOtherSite(site);
+  }
+}
+
+void SiteManager::resetSitePairsForSite(const std::string & site) {
+  std::shared_ptr<Site> sitep = getSite(site);
+  if (!sitep) {
     return;
   }
-  if (blockedpairs.find(site1) == blockedpairs.end()) {
-    blockedpairs[site1] = std::map<Site *, bool>();
-  }
-  blockedpairs[site1][site2] = true;
-}
-
-bool SiteManager::isBlockedPair(Site * site1, Site * site2) const {
-  std::map<Site *, std::map<Site *, bool> >::const_iterator it = blockedpairs.find(site1);
-  if (it == blockedpairs.end()) {
-    return false;
-  }
-  return it->second.find(site2) != it->second.end();
-}
-
-void SiteManager::clearBlocksForSite(Site * site) {
-  std::map<Site *, std::map<Site *, bool> >::iterator it = blockedpairs.find(site);
-  if (it != blockedpairs.end()) {
-    it->second = std::map<Site *, bool>();
-  }
-  for (it = blockedpairs.begin(); it != blockedpairs.end(); it++) {
-    if (it->second.find(site) != it->second.end()) {
-      it->second.erase(site);
+  sitep->clearExceptSites();
+  std::vector<std::shared_ptr<Site> >::iterator it;
+  for (it = sites.begin(); it != sites.end(); it++) {
+    if (*it == sitep) {
+      continue;
+    }
+    if (sitep->getTransferSourcePolicy() == SITE_TRANSFER_POLICY_ALLOW) {
+      (*it)->addAllowedTargetSite(sitep);
+    }
+    else {
+      (*it)->addBlockedTargetSite(sitep);
+    }
+    if (sitep->getTransferTargetPolicy() == SITE_TRANSFER_POLICY_ALLOW) {
+      (*it)->addAllowedSourceSite(sitep);
+    }
+    else {
+      (*it)->addBlockedSourceSite(sitep);
     }
   }
 }
 
-std::list<Site *> SiteManager::getBlocksFromSite(Site * site) const {
-  std::list<Site *> blockedlist;
-  std::map<Site *, std::map<Site *, bool> >::const_iterator it = blockedpairs.find(site);
-  if (it == blockedpairs.end()) {
-    return blockedlist;
+void SiteManager::addExceptSourceForSite(const std::string & site, const std::string & exceptsite) {
+  std::shared_ptr<Site> sitep = getSite(site);
+  std::shared_ptr<Site> exceptsitep = getSite(exceptsite);
+  if (!sitep || !exceptsitep || sitep == exceptsitep) {
+    return;
   }
-  std::map<Site *, bool>::const_iterator it2;
-  for (it2 = it->second.begin(); it2 != it->second.end(); it2++) {
-    blockedlist.push_back(it2->first);
+  if (sitep->getTransferSourcePolicy() == SITE_TRANSFER_POLICY_ALLOW) {
+    sitep->addBlockedSourceSite(exceptsitep);
+    exceptsitep->addBlockedTargetSite(sitep);
   }
-  return blockedlist;
-}
-
-std::list<Site *> SiteManager::getBlocksToSite(Site * site) const {
-  std::list<Site *> blockedlist;
-  std::map<Site *, std::map<Site *, bool> >::const_iterator it;
-  for (it = blockedpairs.begin(); it != blockedpairs.end(); it++) {
-    if (it->second.find(site) != it->second.end()) {
-      blockedlist.push_back(it->first);
-    }
+  else {
+    sitep->addAllowedSourceSite(exceptsitep);
+    exceptsitep->addAllowedTargetSite(sitep);
   }
-  return blockedlist;
 }
 
-std::map<Site *, std::map<Site *, bool> >::const_iterator SiteManager::blockedPairsBegin() const {
-  return blockedpairs.begin();
+void SiteManager::addExceptTargetForSite(const std::string & site, const std::string & exceptsite) {
+  std::shared_ptr<Site> sitep = getSite(site);
+  std::shared_ptr<Site> exceptsitep = getSite(exceptsite);
+  if (!sitep || !exceptsitep || sitep == exceptsitep) {
+    return;
+  }
+  if (sitep->getTransferTargetPolicy() == SITE_TRANSFER_POLICY_ALLOW) {
+    sitep->addBlockedTargetSite(exceptsitep);
+    exceptsitep->addBlockedSourceSite(sitep);
+  }
+  else {
+    sitep->addAllowedTargetSite(exceptsitep);
+    exceptsitep->addAllowedSourceSite(sitep);
+  }
 }
 
-std::map<Site *, std::map<Site *, bool> >::const_iterator SiteManager::blockedPairsEnd() const {
-  return blockedpairs.end();
+void SiteManager::resetHourlyStats() {
+  std::vector<std::shared_ptr<Site> >::iterator it;
+  for (it = sites.begin(); it != sites.end(); it++) {
+    (*it)->resetHourlyStats();
+  }
 }
 
-bool SiteManager::testRankCompatibility(const Site& src, const Site& dst) const {
-  int srcrank = src.getRank();
-  int dstrank = dst.getRank();
-  int srctolerance = src.getRankTolerance();
-  
-  if (srcrank == SITE_RANK_USE_GLOBAL)
-    srcrank = getGlobalRank();
-
-  if (dstrank == SITE_RANK_USE_GLOBAL)
-    dstrank = getGlobalRank();
-
-  if (srctolerance == SITE_RANK_USE_GLOBAL) 
-    srctolerance = getGlobalRankTolerance();
-
-  return (dstrank >= (srcrank - srctolerance));
+void SiteManager::resetAllStats() {
+  std::vector<std::shared_ptr<Site> >::iterator it;
+  for (it = sites.begin(); it != sites.end(); it++) {
+    (*it)->resetAllStats();
+  }
 }
-
