@@ -46,7 +46,7 @@
 #define MAX_CHECKS_ROW_PRIO_LOW 2
 #define MAX_CHECKS_ROW_PRIO_NORMAL 3
 #define MAX_CHECKS_ROW_PRIO_HIGH 4
-#define MAX_CHECKS_ROW_PRIO_VERY_HIGH 5
+#define MAX_CHECKS_ROW_PRIO_VERY_HIGH 20
 
 // maximum number of ready requests available to be checked out, unless below
 #define MAX_REQUEST_READY_QUEUE_SIZE 10
@@ -307,12 +307,10 @@ void SiteLogic::tick(int message) {
     }
   }
   refreshgovernor.timePassed(TICK_INTERVAL);
-  if (refreshgovernor.refreshAllowed() && !currentraces.empty() && !idlingconns.empty()) {
-    unsigned int winindex = rand() % idlingconns.size();
-    unsigned int winner = idlingconns[winindex];
-    handleSpreadJobs(winner, false);
-    if(connstatetracker[winner].isLocked() || conns[winner]->isProcessing()) {
-      idlingconns.erase(idlingconns.begin() + winindex);
+  if (!currentraces.empty() && !idlingconns.empty()) {
+    for (int i = idlingconns.size() - 1; i >= 0; --i) {
+      unsigned int winner = idlingconns[i];
+      handleSpreadJobs(winner, false);
     }
   }
   for (unsigned int i : idlingconns) {
@@ -517,8 +515,8 @@ void SiteLogic::commandSuccess(int id, FTPConnState state) {
   connstatetracker[id].resetIdleTime();
   std::list<SiteLogicRequest>::iterator it;
   if (!refreshgovernor.refreshAllowed() && refreshgovernor.immediateRefreshAllowed()) {
-    if (state != FTPConnState::CWD && state != FTPConnState::LIST && state != FTPConnState::LIST_COMPLETE &&
-        state != FTPConnState::PRET_LIST)
+    if (state != FTPConnState::LIST && state != FTPConnState::LIST_COMPLETE &&
+        state != FTPConnState::PRET_LIST && state != FTPConnState::STAT)
     {
       connstatetracker[id].setRefreshToken();
       refreshgovernor.useRefresh();
@@ -745,8 +743,8 @@ void SiteLogic::commandFail(int id, FailureType failuretype) {
   connstatetracker[id].resetIdleTime();
   FTPConnState state = conns[id]->getState();
   if (!refreshgovernor.refreshAllowed() && refreshgovernor.immediateRefreshAllowed()) {
-    if (state != FTPConnState::CWD && state != FTPConnState::LIST && state != FTPConnState::LIST_COMPLETE &&
-        state != FTPConnState::PRET_LIST)
+    if (state != FTPConnState::LIST && state != FTPConnState::LIST_COMPLETE &&
+        state != FTPConnState::PRET_LIST && state != FTPConnState::STAT)
     {
       connstatetracker[id].setRefreshToken();
       refreshgovernor.useRefresh();
@@ -1335,16 +1333,21 @@ bool SiteLogic::handleSpreadJob(int id) {
     connstatetracker[id].setLastChecked(race);
     triedraces.insert(race);
     if (!connstatetracker[id].hasRefreshToken()) {
-      if (refreshgovernor.refreshAllowed()) {
+      if (site->getPriority() == SitePriority::VERY_HIGH) {
+        if (connstatetracker[id].getTimePassed() >= 50) {
+          connstatetracker[id].setRefreshToken();
+        }
+        else {
+          refresh = false;
+        }
+      }
+      else if (refreshgovernor.refreshAllowed()) {
         refreshgovernor.useRefresh();
         connstatetracker[id].setRefreshToken();
       }
       else {
         refresh = false;
       }
-    }
-    else {
-      refreshgovernor.useRefresh();
     }
     const Path & currentpath = conns[id]->getCurrentPath();
     const Path & racepath = race->getPath();

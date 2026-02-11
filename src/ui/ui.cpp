@@ -1075,7 +1075,7 @@ void Ui::loadSettings(std::shared_ptr<DataFileHandler> dfh) {
 void Ui::saveSettings(std::shared_ptr<DataFileHandler> dfh) {
   dfh->addOutputLine("UI", "legendmode=" + std::to_string(getLegendMode()));
   dfh->addOutputLine("UI", "highlightentireline=" + std::string(getHighlightEntireLine() ? "true" : "false"));
-  dfh->addOutputLine("UI", "showfreetext=" + getShowFreeText());
+  dfh->addOutputLine("UI", "showfreetext=" + std::string(getShowFreeText() ? "true" : "false"));
   for (const KeyBinds* keybinds : allkeybinds) {
     for (std::list<KeyBinds::KeyData>::const_iterator it = keybinds->begin(); it != keybinds->end(); ++it) {
       if (it->configuredkeys != it->originalkeys) {
