@@ -8,7 +8,7 @@ enum {
   TICK_SECOND
 };
 
-Statistics::Statistics() : spreadjobs(0), transferjobs(0), currentsecondrefreshtrack(0), lastsecondrefreshtrack(0)
+Statistics::Statistics() : spreadjobs(0), transferjobs(0), currentsecondrefreshtrack(0), lastsecondrefreshtrack(0), maxfilelistrefreshrate(0)
 {
   global->getTickPoke()->startPoke(this, "Statistics", 60 * 1000, TICK_MINUTE);
   global->getTickPoke()->startPoke(this, "Statistics", 1000, TICK_SECOND);
@@ -30,6 +30,9 @@ void Statistics::tick(int message) {
   }
   else if (message == TICK_SECOND) {
     lastsecondrefreshtrack = currentsecondrefreshtrack;
+    if (lastsecondrefreshtrack > maxfilelistrefreshrate) {
+      maxfilelistrefreshrate = lastsecondrefreshtrack;
+    }
     currentsecondrefreshtrack = 0;
   }
 }
@@ -121,6 +124,10 @@ unsigned int Statistics::getTransferJobs() const {
 
 unsigned int Statistics::getFileListRefreshRate() const {
   return lastsecondrefreshtrack;
+}
+
+unsigned int Statistics::getMaxFileListRefreshRate() const {
+  return maxfilelistrefreshrate;
 }
 
 void Statistics::setSpreadJobs(unsigned int jobs) {
