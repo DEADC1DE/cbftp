@@ -56,7 +56,7 @@ else
 $(info Using OPTFLAGS provided by shell)
 endif
 ifndef CXXFLAGS
-CXXFLAGS = $(OPTFLAGS) -std=c++11 -Wall -MMD -MP
+CXXFLAGS = $(OPTFLAGS) -std=c++17 -Wall -MMD -MP
 ifdef STATIC_SSL_INCLUDE
 CXXFLAGS += $(STATIC_SSL_INCLUDE)
 endif
