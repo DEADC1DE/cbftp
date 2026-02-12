@@ -9,6 +9,11 @@
 #include "scoreboardelement.h"
 #include "race.h"
 
+std::vector<ScoreBoardElement*> ScoreBoard::getSnapshot() const {
+  std::shared_lock<std::shared_mutex> lock(mutex_);
+  return std::vector<ScoreBoardElement*>(elements.begin(), elements.begin() + showsize);
+}
+
 ScoreBoard::ScoreBoard() :
   showsize(0),
   count(new unsigned int[USHORT_MAX]),
@@ -29,6 +34,7 @@ void ScoreBoard::update(
     const std::shared_ptr<SiteLogic> & dst, const std::shared_ptr<FileList>& fld, const std::shared_ptr<SiteRace> & srd,
     const std::shared_ptr<Race> & race, const std::string & subdir)
 {
+  std::unique_lock<std::shared_mutex> lock(mutex_);
   auto flsit = elementlocator.find(fls);
   if (flsit != elementlocator.end()) {
     std::unordered_map<std::shared_ptr<FileList>, std::unordered_map<std::string, ScoreBoardElement*>>& fldmap = flsit->second;
@@ -65,6 +71,7 @@ void ScoreBoard::update(ScoreBoardElement * sbe) {
 }
 
 ScoreBoardElement * ScoreBoard::find(const std::string& name, const std::shared_ptr<FileList>& fls, const std::shared_ptr<FileList>& fld) const {
+  std::shared_lock<std::shared_mutex> lock(mutex_);
   const auto flsit = elementlocator.find(fls);
   if (flsit == elementlocator.end()) {
     return nullptr;
@@ -82,11 +89,8 @@ ScoreBoardElement * ScoreBoard::find(const std::string& name, const std::shared_
   return fileit->second;
 }
 
-bool ScoreBoard::remove(ScoreBoardElement* sbe) {
-  return remove(sbe->fileName(), sbe->getSourceFileList(), sbe->getDestinationFileList());
-}
-
-bool ScoreBoard::remove(const std::string & name, const std::shared_ptr<FileList>& fls, const std::shared_ptr<FileList>& fld) {
+// Internal unlocked version of remove - caller must hold unique_lock
+bool ScoreBoard::removeInternal(const std::string & name, const std::shared_ptr<FileList>& fls, const std::shared_ptr<FileList>& fld) {
   auto flsit = elementlocator.find(fls);
   if (flsit == elementlocator.end()) {
     return false;
@@ -104,18 +108,36 @@ bool ScoreBoard::remove(const std::string & name, const std::shared_ptr<FileList
   ScoreBoardElement* sbe = fileit->second;
   filemap.erase(fileit);
   destinationlocator[sbe->getDestinationFileList()].erase(sbe);
-  ScoreBoardElement* remove = elements[showsize - 1];
-  if (showsize && sbe != remove) {
-    sbe->reset(*remove);
+  ScoreBoardElement* last = elements[showsize - 1];
+  if (showsize && sbe != last) {
+    sbe->reset(*last);
     elementlocator[sbe->getSourceFileList()][sbe->getDestinationFileList()][sbe->fileName()] = sbe;
-    destinationlocator[sbe->getDestinationFileList()].erase(remove);
+    destinationlocator[sbe->getDestinationFileList()].erase(last);
     destinationlocator[sbe->getDestinationFileList()].insert(sbe);
   }
   --showsize;
   return true;
 }
 
+// Internal unlocked version of wipe - caller must hold unique_lock
+void ScoreBoard::wipeInternal() {
+  showsize = 0;
+  elementlocator.clear();
+  destinationlocator.clear();
+}
+
+bool ScoreBoard::remove(ScoreBoardElement* sbe) {
+  std::unique_lock<std::shared_mutex> lock(mutex_);
+  return removeInternal(sbe->fileName(), sbe->getSourceFileList(), sbe->getDestinationFileList());
+}
+
+bool ScoreBoard::remove(const std::string & name, const std::shared_ptr<FileList>& fls, const std::shared_ptr<FileList>& fld) {
+  std::unique_lock<std::shared_mutex> lock(mutex_);
+  return removeInternal(name, fls, fld);
+}
+
 void ScoreBoard::sort() {
+  std::unique_lock<std::shared_mutex> lock(mutex_);
   // base2^16 single-pass radix sort
   memset(count, 0, countarraybytesize);
   for (unsigned int i = 0; i < showsize; i++) {
@@ -134,28 +156,8 @@ void ScoreBoard::sort() {
   }
 }
 
-/*void ScoreBoard::sort() {
-  // base2^8 LSD radix sort
-  for (unsigned char shift = 0; shift < 16; shift += 8) {
-    memset(count, 0, 0x100 * sizeof(unsigned int);
-    for (unsigned int i = 0; i < showsize; i++) {
-      ++count[(elements[i]->getScore() >> shift) & 0xFF];
-    }
-    unsigned int currentpos = showsize - 1;
-    for (unsigned short i = 0; i < 0x100; currentpos -= count[i++]) {
-      bucketpositions[i] = currentpos;
-    }
-    for (unsigned int i = 0; i < showsize; i++) {
-      ScoreBoardElement * currentelem = elements[i];
-      elementstmp[bucketpositions[(currentelem->getScore() >> shift) & 0xFF]--] = currentelem;
-    }
-    for (unsigned int i = 0; i < showsize; i++) {
-      elements[i] = elementstmp[i];
-    }
-  }
-}*/
-
 void ScoreBoard::shuffleEquals() {
+  std::unique_lock<std::shared_mutex> lock(mutex_);
   if (!showsize) {
     return;
   }
@@ -201,6 +203,7 @@ std::vector<ScoreBoardElement*>::iterator ScoreBoard::end() {
 }
 
 unsigned int ScoreBoard::size() const {
+  std::shared_lock<std::shared_mutex> lock(mutex_);
   return showsize;
 }
 
@@ -209,12 +212,12 @@ const std::vector<ScoreBoardElement*>& ScoreBoard::getElementVector() const{
 }
 
 void ScoreBoard::wipe() {
-  showsize = 0;
-  elementlocator.clear();
-  destinationlocator.clear();
+  std::unique_lock<std::shared_mutex> lock(mutex_);
+  wipeInternal();
 }
 
 void ScoreBoard::wipe(const std::shared_ptr<FileList>& fl) {
+  std::unique_lock<std::shared_mutex> lock(mutex_);
   auto flsit = elementlocator.find(fl);
   std::list<std::tuple<std::string, std::shared_ptr<FileList>, std::shared_ptr<FileList>>> removelist;
   if (flsit != elementlocator.end()) {
@@ -234,16 +237,17 @@ void ScoreBoard::wipe(const std::shared_ptr<FileList>& fl) {
     }
   }
   for (const std::tuple<std::string, std::shared_ptr<FileList>, std::shared_ptr<FileList>>& elem : removelist) {
-    remove(std::get<0>(elem), std::get<1>(elem), std::get<2>(elem));
+    removeInternal(std::get<0>(elem), std::get<1>(elem), std::get<2>(elem));
   }
   elementlocator.erase(fl);
   destinationlocator.erase(fl);
   if (!showsize) {
-    wipe();
+    wipeInternal();
   }
 }
 
 void ScoreBoard::resetSkipChecked(const std::shared_ptr<FileList>& fl) {
+  std::shared_lock<std::shared_mutex> lock(mutex_);
   auto it = destinationlocator.find(fl);
   if (it != destinationlocator.end()) {
     for (ScoreBoardElement * sbe : it->second) {

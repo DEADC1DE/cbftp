@@ -1,6 +1,8 @@
 #pragma once
 
 #include <memory>
+#include <mutex>
+#include <shared_mutex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -25,9 +27,12 @@ class ScoreBoard {
     unsigned int* bucketpositions;
     unsigned int countarraybytesize;
     void shuffle(unsigned int firstpos, unsigned int lastpos);
+    bool removeInternal(const std::string& name, const std::shared_ptr<FileList>& fls, const std::shared_ptr<FileList>& fld);
+    void wipeInternal();
     std::unordered_map<std::shared_ptr<FileList>, std::unordered_map<std::shared_ptr<FileList>,
       std::unordered_map<std::string, ScoreBoardElement*>>> elementlocator;
     std::unordered_map<std::shared_ptr<FileList>, std::unordered_set<ScoreBoardElement*>> destinationlocator;
+    mutable std::shared_mutex mutex_;
   public:
     ScoreBoard();
     ~ScoreBoard();
@@ -52,4 +57,11 @@ class ScoreBoard {
     void wipe();
     void wipe(const std::shared_ptr<FileList>& fl);
     void resetSkipChecked(const std::shared_ptr<FileList>& fl);
+
+    /* Thread-safe snapshot of the element vector for iteration without holding locks */
+    std::vector<ScoreBoardElement*> getSnapshot() const;
+
+    /* Lock access for external callers needing extended operations */
+    std::shared_lock<std::shared_mutex> readLock() const { return std::shared_lock<std::shared_mutex>(mutex_); }
+    std::unique_lock<std::shared_mutex> writeLock() { return std::unique_lock<std::shared_mutex>(mutex_); }
 };
