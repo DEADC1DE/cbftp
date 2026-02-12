@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <mutex>
 #include <string>
 #include <utility>
 
@@ -83,7 +84,8 @@ class TransferMonitor : public Core::EventReceiver, public RawBufferCallback {
     std::shared_ptr<CommandOwner> dstco;
     int maxtransfertimeseconds;
     bool timeout;
-    void finish();
+    mutable std::recursive_mutex monitormutex;
+    int finish();
     void setTargetSizeSpeed(unsigned long long int, int);
     void reset();
     void transferFailed(const std::shared_ptr<TransferStatus> &, TransferError);

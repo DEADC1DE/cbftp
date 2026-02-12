@@ -24,6 +24,12 @@
 #include "transferprotocol.h"
 #include "timereference.h"
 
+namespace {
+constexpr int FINISH_CB_NONE = 0;
+constexpr int FINISH_CB_DOWNLOAD_COMPLETED = 1;
+constexpr int FINISH_CB_LIST_COMPLETED = 2;
+} // namespace
+
 // max time to wait for the other site to fail after a failure has happened
 // before a hard disconnect occurs, in ms
 #define MAX_WAIT_ERROR 5000
@@ -373,22 +379,36 @@ void TransferMonitor::tick(int msg) {
 }
 
 void TransferMonitor::passiveReady(const std::string & host, int port) {
-  assert(status == TM_STATUS_AWAITING_PASSIVE ||
-         status == TM_STATUS_TARGET_ERROR_AWAITING_SOURCE ||
-         status == TM_STATUS_SOURCE_ERROR_AWAITING_TARGET);
-  if (status == TM_STATUS_TARGET_ERROR_AWAITING_SOURCE) {
+  enum class PassiveAction { NONE, SRC_ERROR_RETURN, DST_ERROR_RETURN, PROCEED };
+  PassiveAction action = PassiveAction::NONE;
+  {
+    std::unique_lock<std::recursive_mutex> lock(monitormutex);
+    assert(status == TM_STATUS_AWAITING_PASSIVE ||
+           status == TM_STATUS_TARGET_ERROR_AWAITING_SOURCE ||
+           status == TM_STATUS_SOURCE_ERROR_AWAITING_TARGET);
+    if (status == TM_STATUS_TARGET_ERROR_AWAITING_SOURCE) {
+      action = PassiveAction::SRC_ERROR_RETURN;
+    }
+    else if (status == TM_STATUS_SOURCE_ERROR_AWAITING_TARGET) {
+      action = PassiveAction::DST_ERROR_RETURN;
+    }
+    else {
+      setStatus(TM_STATUS_AWAITING_ACTIVE);
+      if (!!ts) {
+        ts->setPassiveAddress((ipv6 ? "[" + host + "]" : host) + ":" + std::to_string(port));
+      }
+      action = PassiveAction::PROCEED;
+    }
+  }
+  if (action == PassiveAction::SRC_ERROR_RETURN) {
     sourceError(TM_ERR_OTHER);
     sls->returnConn(src, type != TM_TYPE_LIST);
     return;
   }
-  if (status == TM_STATUS_SOURCE_ERROR_AWAITING_TARGET) {
+  if (action == PassiveAction::DST_ERROR_RETURN) {
     targetError(TM_ERR_OTHER);
     sld->returnConn(dst, type != TM_TYPE_LIST);
     return;
-  }
-  setStatus(TM_STATUS_AWAITING_ACTIVE);
-  if (!!ts) {
-    ts->setPassiveAddress((ipv6 ? "[" + host + "]" : host) + ":" + std::to_string(port));
   }
   switch (type) {
     case TM_TYPE_FXP:
@@ -434,55 +454,84 @@ void TransferMonitor::passiveReady(const std::string & host, int port) {
 }
 
 void TransferMonitor::activeReady() {
-  assert(status == TM_STATUS_AWAITING_ACTIVE ||
-         status == TM_STATUS_TARGET_ERROR_AWAITING_SOURCE ||
-         status == TM_STATUS_SOURCE_ERROR_AWAITING_TARGET);
-  if (status == TM_STATUS_TARGET_ERROR_AWAITING_SOURCE) {
-    sourceError(TM_ERR_OTHER);
-    sls->returnConn(src, type != TM_TYPE_LIST);
-    return;
-  }
-  if (status == TM_STATUS_SOURCE_ERROR_AWAITING_TARGET) {
-    targetError(TM_ERR_OTHER);
-    sld->returnConn(dst, type != TM_TYPE_LIST);
-    return;
-  }
-  if (type == TM_TYPE_FXP) {
-    if (fxpdstactive) {
-      sld->upload(dst);
+  enum class ActiveAction { SRC_ERROR_RETURN, DST_ERROR_RETURN, FXP_DST_UPLOAD, FXP_SRC_DOWNLOAD, CLIENT_TRANSFER };
+  ActiveAction action;
+  {
+    std::unique_lock<std::recursive_mutex> lock(monitormutex);
+    assert(status == TM_STATUS_AWAITING_ACTIVE ||
+           status == TM_STATUS_TARGET_ERROR_AWAITING_SOURCE ||
+           status == TM_STATUS_SOURCE_ERROR_AWAITING_TARGET);
+    if (status == TM_STATUS_TARGET_ERROR_AWAITING_SOURCE) {
+      action = ActiveAction::SRC_ERROR_RETURN;
+    }
+    else if (status == TM_STATUS_SOURCE_ERROR_AWAITING_TARGET) {
+      action = ActiveAction::DST_ERROR_RETURN;
+    }
+    else if (type == TM_TYPE_FXP) {
+      action = fxpdstactive ? ActiveAction::FXP_DST_UPLOAD : ActiveAction::FXP_SRC_DOWNLOAD;
     }
     else {
-      sls->download(src);
+      action = ActiveAction::CLIENT_TRANSFER;
     }
   }
-  else {
-    startClientTransfer();
+  switch (action) {
+    case ActiveAction::SRC_ERROR_RETURN:
+      sourceError(TM_ERR_OTHER);
+      sls->returnConn(src, type != TM_TYPE_LIST);
+      break;
+    case ActiveAction::DST_ERROR_RETURN:
+      targetError(TM_ERR_OTHER);
+      sld->returnConn(dst, type != TM_TYPE_LIST);
+      break;
+    case ActiveAction::FXP_DST_UPLOAD:
+      sld->upload(dst);
+      break;
+    case ActiveAction::FXP_SRC_DOWNLOAD:
+      sls->download(src);
+      break;
+    case ActiveAction::CLIENT_TRANSFER:
+      startClientTransfer();
+      break;
   }
 }
 
 void TransferMonitor::activeStarted() {
-  assert(status == TM_STATUS_AWAITING_ACTIVE ||
-         status == TM_STATUS_TARGET_ERROR_AWAITING_SOURCE ||
-         status == TM_STATUS_SOURCE_ERROR_AWAITING_TARGET ||
-         status == TM_STATUS_TRANSFERRING_TARGET_COMPLETE);
-  if (status == TM_STATUS_AWAITING_ACTIVE) {
-    setStatus(TM_STATUS_TRANSFERRING);
-    if (type == TM_TYPE_FXP) {
-      if (fxpdstactive) {
-        sls->download(src);
+  enum class StartAction { NONE, FXP_DOWNLOAD, FXP_UPLOAD, CLIENT_TRANSFER };
+  StartAction action = StartAction::NONE;
+  {
+    std::unique_lock<std::recursive_mutex> lock(monitormutex);
+    assert(status == TM_STATUS_AWAITING_ACTIVE ||
+           status == TM_STATUS_TARGET_ERROR_AWAITING_SOURCE ||
+           status == TM_STATUS_SOURCE_ERROR_AWAITING_TARGET ||
+           status == TM_STATUS_TRANSFERRING_TARGET_COMPLETE);
+    if (status == TM_STATUS_AWAITING_ACTIVE) {
+      setStatus(TM_STATUS_TRANSFERRING);
+      if (type == TM_TYPE_FXP) {
+        action = fxpdstactive ? StartAction::FXP_DOWNLOAD : StartAction::FXP_UPLOAD;
       }
-      else {
-        sld->upload(dst);
+      else if (clientactive) {
+        action = StartAction::CLIENT_TRANSFER;
       }
+      startstamp = timestamp;
     }
-    else if (clientactive) {
+  }
+  switch (action) {
+    case StartAction::FXP_DOWNLOAD:
+      sls->download(src);
+      break;
+    case StartAction::FXP_UPLOAD:
+      sld->upload(dst);
+      break;
+    case StartAction::CLIENT_TRANSFER:
       startClientTransfer();
-    }
-    startstamp = timestamp;
+      break;
+    case StartAction::NONE:
+      break;
   }
 }
 
 void TransferMonitor::sslDetails(const std::string & cipher, bool sessionreused) {
+  std::unique_lock<std::recursive_mutex> lock(monitormutex);
   if (!!ts) {
     ts->setCipher(cipher);
     ts->setSSLSessionReused(sessionreused);
@@ -512,50 +561,93 @@ void TransferMonitor::startClientTransfer() {
 }
 
 void TransferMonitor::sourceComplete() {
-  assert(status == TM_STATUS_TARGET_ERROR_AWAITING_SOURCE ||
-         status == TM_STATUS_TRANSFERRING ||
-         status == TM_STATUS_TRANSFERRING_TARGET_COMPLETE);
-  partialcompletestamp = timestamp;
-  if (fls) {
-    fls->finishDownload(sfile);
+  bool doFinish = false;
+  bool doFail = false;
+  TransferError savedError;
+  std::shared_ptr<TransferStatus> savedTs;
+  {
+    std::unique_lock<std::recursive_mutex> lock(monitormutex);
+    assert(status == TM_STATUS_TARGET_ERROR_AWAITING_SOURCE ||
+           status == TM_STATUS_TRANSFERRING ||
+           status == TM_STATUS_TRANSFERRING_TARGET_COMPLETE);
+    partialcompletestamp = timestamp;
+    if (fls) {
+      fls->finishDownload(sfile);
+    }
+    if (status == TM_STATUS_TRANSFERRING) {
+      setStatus(TM_STATUS_TRANSFERRING_SOURCE_COMPLETE);
+    }
+    else if (status == TM_STATUS_TARGET_ERROR_AWAITING_SOURCE) {
+      savedError = error;
+      savedTs = ts;
+      doFail = true;
+    }
+    else {
+      doFinish = true;
+    }
   }
-  if (status == TM_STATUS_TRANSFERRING) {
-    setStatus(TM_STATUS_TRANSFERRING_SOURCE_COMPLETE);
+  if (doFail) {
+    transferFailed(savedTs, savedError);
   }
-  else if (status == TM_STATUS_TARGET_ERROR_AWAITING_SOURCE) {
-    transferFailed(ts, error);
-  }
-  else {
-    finish();
+  else if (doFinish) {
+    int cb = finish();
+    if (cb == FINISH_CB_DOWNLOAD_COMPLETED) {
+      sls->downloadCompleted(src, storeid, fls, srcco);
+    }
+    else if (cb == FINISH_CB_LIST_COMPLETED) {
+      sls->listCompleted(src, storeid, fls, srcco);
+    }
   }
 }
 
 void TransferMonitor::targetComplete() {
-  assert(status == TM_STATUS_SOURCE_ERROR_AWAITING_TARGET ||
-         status == TM_STATUS_TRANSFERRING ||
-         status == TM_STATUS_TRANSFERRING_SOURCE_COMPLETE ||
-         status == TM_STATUS_AWAITING_ACTIVE);
-  partialcompletestamp = timestamp;
-  if (fld) {
-    fld->finishUpload(dfile);
-  }
-  if (type == TM_TYPE_DOWNLOAD) {
-    if (localfl) {
-      localfl->finishDownload(dfile);
+  bool doFinish = false;
+  bool doFail = false;
+  TransferError savedError;
+  std::shared_ptr<TransferStatus> savedTs;
+  {
+    std::unique_lock<std::recursive_mutex> lock(monitormutex);
+    assert(status == TM_STATUS_SOURCE_ERROR_AWAITING_TARGET ||
+           status == TM_STATUS_TRANSFERRING ||
+           status == TM_STATUS_TRANSFERRING_SOURCE_COMPLETE ||
+           status == TM_STATUS_AWAITING_ACTIVE);
+    partialcompletestamp = timestamp;
+    if (fld) {
+      fld->finishUpload(dfile);
+    }
+    if (type == TM_TYPE_DOWNLOAD) {
+      if (localfl) {
+        localfl->finishDownload(dfile);
+      }
+    }
+    if (status == TM_STATUS_TRANSFERRING || status == TM_STATUS_AWAITING_ACTIVE) {
+      setStatus(TM_STATUS_TRANSFERRING_TARGET_COMPLETE);
+    }
+    else if (status == TM_STATUS_SOURCE_ERROR_AWAITING_TARGET) {
+      savedError = error;
+      savedTs = ts;
+      doFail = true;
+    }
+    else {
+      doFinish = true;
     }
   }
-  if (status == TM_STATUS_TRANSFERRING || status == TM_STATUS_AWAITING_ACTIVE) {
-    setStatus(TM_STATUS_TRANSFERRING_TARGET_COMPLETE);
+  if (doFail) {
+    transferFailed(savedTs, savedError);
   }
-  else if (status == TM_STATUS_SOURCE_ERROR_AWAITING_TARGET) {
-    transferFailed(ts, error);
-  }
-  else {
-    finish();
+  else if (doFinish) {
+    int cb = finish();
+    if (cb == FINISH_CB_DOWNLOAD_COMPLETED) {
+      sls->downloadCompleted(src, storeid, fls, srcco);
+    }
+    else if (cb == FINISH_CB_LIST_COMPLETED) {
+      sls->listCompleted(src, storeid, fls, srcco);
+    }
   }
 }
 
-void TransferMonitor::finish() {
+int TransferMonitor::finish() {
+  int callback = FINISH_CB_NONE;
   int span = timestamp - startstamp;
   if (span == 0) {
     span = 10;
@@ -585,7 +677,7 @@ void TransferMonitor::finish() {
         }
       }
       if (type == TM_TYPE_DOWNLOAD) {
-        sls->downloadCompleted(src, storeid, fls, srcco);
+        callback = FINISH_CB_DOWNLOAD_COMPLETED;
       }
       break;
     }
@@ -600,7 +692,7 @@ void TransferMonitor::finish() {
       break;
     }
     case TM_TYPE_LIST:
-      sls->listCompleted(src, storeid, fls, srcco);
+      callback = FINISH_CB_LIST_COMPLETED;
       break;
   }
   if (!!ts) {
@@ -608,56 +700,107 @@ void TransferMonitor::finish() {
   }
   tm->transferSuccessful(ts);
   setStatus(TM_STATUS_IDLE);
+  return callback;
 }
 
 void TransferMonitor::sourceError(TransferError err) {
-  assert(status == TM_STATUS_AWAITING_ACTIVE ||
-         status == TM_STATUS_AWAITING_PASSIVE ||
-         status == TM_STATUS_TARGET_ERROR_AWAITING_SOURCE ||
-         status == TM_STATUS_TRANSFERRING ||
-         status == TM_STATUS_TRANSFERRING_TARGET_COMPLETE);
-  if (fls) {
-    fls->finishDownload(sfile);
+  enum class SrcErrAction { CHECK_DST, FAIL, WAIT, WAIT_AND_CLOSE };
+  SrcErrAction action;
+  {
+    std::unique_lock<std::recursive_mutex> lock(monitormutex);
+    assert(status == TM_STATUS_AWAITING_ACTIVE ||
+           status == TM_STATUS_AWAITING_PASSIVE ||
+           status == TM_STATUS_TARGET_ERROR_AWAITING_SOURCE ||
+           status == TM_STATUS_TRANSFERRING ||
+           status == TM_STATUS_TRANSFERRING_TARGET_COMPLETE);
+    if (fls) {
+      fls->finishDownload(sfile);
+    }
+    partialcompletestamp = timestamp;
+    if (status == TM_STATUS_AWAITING_PASSIVE || status == TM_STATUS_AWAITING_ACTIVE) {
+      action = SrcErrAction::CHECK_DST;
+    }
+    else if (status == TM_STATUS_TRANSFERRING_TARGET_COMPLETE ||
+             status == TM_STATUS_TARGET_ERROR_AWAITING_SOURCE ||
+             (type == TM_TYPE_DOWNLOAD && lt == nullptr))
+    {
+      action = SrcErrAction::FAIL;
+    }
+    else {
+      error = err;
+      setStatus(TM_STATUS_SOURCE_ERROR_AWAITING_TARGET);
+      action = (type == TM_TYPE_DOWNLOAD) ? SrcErrAction::WAIT_AND_CLOSE : SrcErrAction::WAIT;
+    }
   }
-  partialcompletestamp = timestamp;
-  if (status == TM_STATUS_AWAITING_PASSIVE || status == TM_STATUS_AWAITING_ACTIVE) {
+  if (action == SrcErrAction::CHECK_DST) {
     if (!!sld && !sld->getConn(dst)->isProcessing()) {
       sld->returnConn(dst, type != TM_TYPE_LIST);
       fld->finishUpload(dfile);
       transferFailed(ts, err);
       return;
     }
+    // Destination still processing; re-acquire lock to set wait state
+    {
+      std::unique_lock<std::recursive_mutex> lock(monitormutex);
+      // Re-check: target may have completed/errored while lock was released
+      if (status == TM_STATUS_IDLE) {
+        return; // already handled by concurrent targetError/targetComplete
+      }
+      if (status == TM_STATUS_TRANSFERRING_TARGET_COMPLETE ||
+          status == TM_STATUS_TARGET_ERROR_AWAITING_SOURCE)
+      {
+        action = SrcErrAction::FAIL;
+      }
+      else {
+        error = err;
+        setStatus(TM_STATUS_SOURCE_ERROR_AWAITING_TARGET);
+        action = (type == TM_TYPE_DOWNLOAD) ? SrcErrAction::WAIT_AND_CLOSE : SrcErrAction::WAIT;
+      }
+    }
   }
-  if (status == TM_STATUS_TRANSFERRING_TARGET_COMPLETE ||
-      status == TM_STATUS_TARGET_ERROR_AWAITING_SOURCE ||
-      (type == TM_TYPE_DOWNLOAD && lt == nullptr))
-  {
+  if (action == SrcErrAction::FAIL) {
     transferFailed(ts, err);
-    return;
   }
-  error = err;
-  setStatus(TM_STATUS_SOURCE_ERROR_AWAITING_TARGET);
-  if (type == TM_TYPE_DOWNLOAD) {
+  else if (action == SrcErrAction::WAIT_AND_CLOSE) {
     closeRemainingConnections();
   }
 }
 
 void TransferMonitor::targetError(TransferError err) {
-  assert(status == TM_STATUS_AWAITING_ACTIVE ||
-         status == TM_STATUS_AWAITING_PASSIVE ||
-         status == TM_STATUS_SOURCE_ERROR_AWAITING_TARGET ||
-         status == TM_STATUS_TRANSFERRING ||
-         status == TM_STATUS_TRANSFERRING_SOURCE_COMPLETE);
-  if (fld) {
-    if  (err != TM_ERR_DUPE) {
-      fld->removeFile(dfile);
+  enum class DstErrAction { CHECK_SRC, FAIL, WAIT, WAIT_AND_CLOSE };
+  DstErrAction action;
+  {
+    std::unique_lock<std::recursive_mutex> lock(monitormutex);
+    assert(status == TM_STATUS_AWAITING_ACTIVE ||
+           status == TM_STATUS_AWAITING_PASSIVE ||
+           status == TM_STATUS_SOURCE_ERROR_AWAITING_TARGET ||
+           status == TM_STATUS_TRANSFERRING ||
+           status == TM_STATUS_TRANSFERRING_SOURCE_COMPLETE);
+    if (fld) {
+      if (err != TM_ERR_DUPE) {
+        fld->removeFile(dfile);
+      }
+      else {
+        fld->finishUpload(dfile);
+      }
+    }
+    partialcompletestamp = timestamp;
+    if (status == TM_STATUS_AWAITING_PASSIVE || status == TM_STATUS_AWAITING_ACTIVE) {
+      action = DstErrAction::CHECK_SRC;
+    }
+    else if (status == TM_STATUS_TRANSFERRING_SOURCE_COMPLETE ||
+             status == TM_STATUS_SOURCE_ERROR_AWAITING_TARGET ||
+             (type == TM_TYPE_UPLOAD && lt == nullptr))
+    {
+      action = DstErrAction::FAIL;
     }
     else {
-      fld->finishUpload(dfile);
+      error = err;
+      setStatus(TM_STATUS_TARGET_ERROR_AWAITING_SOURCE);
+      action = (type == TM_TYPE_UPLOAD) ? DstErrAction::WAIT_AND_CLOSE : DstErrAction::WAIT;
     }
   }
-  partialcompletestamp = timestamp;
-  if (status == TM_STATUS_AWAITING_PASSIVE || status == TM_STATUS_AWAITING_ACTIVE) {
+  if (action == DstErrAction::CHECK_SRC) {
     if (!!sls && !sls->getConn(src)->isProcessing()) {
       sls->returnConn(src, type != TM_TYPE_LIST);
       if (fls) { // unset in case of LIST
@@ -666,17 +809,29 @@ void TransferMonitor::targetError(TransferError err) {
       transferFailed(ts, err);
       return;
     }
+    // Source still processing; re-acquire lock to set wait state
+    {
+      std::unique_lock<std::recursive_mutex> lock(monitormutex);
+      // Re-check: source may have completed/errored while lock was released
+      if (status == TM_STATUS_IDLE) {
+        return; // already handled by concurrent sourceError/sourceComplete
+      }
+      if (status == TM_STATUS_TRANSFERRING_SOURCE_COMPLETE ||
+          status == TM_STATUS_SOURCE_ERROR_AWAITING_TARGET)
+      {
+        action = DstErrAction::FAIL;
+      }
+      else {
+        error = err;
+        setStatus(TM_STATUS_TARGET_ERROR_AWAITING_SOURCE);
+        action = (type == TM_TYPE_UPLOAD) ? DstErrAction::WAIT_AND_CLOSE : DstErrAction::WAIT;
+      }
+    }
   }
-  if (status == TM_STATUS_TRANSFERRING_SOURCE_COMPLETE ||
-      status == TM_STATUS_SOURCE_ERROR_AWAITING_TARGET ||
-      (type == TM_TYPE_UPLOAD && lt == nullptr))
-  {
+  if (action == DstErrAction::FAIL) {
     transferFailed(ts, err);
-    return;
   }
-  error = err;
-  setStatus(TM_STATUS_TARGET_ERROR_AWAITING_SOURCE);
-  if (type == TM_TYPE_UPLOAD) {
+  else if (action == DstErrAction::WAIT_AND_CLOSE) {
     closeRemainingConnections();
   }
 }
