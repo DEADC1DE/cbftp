@@ -82,7 +82,16 @@ FTPConn::FTPConn(SiteLogic * sl, int id) :
   xduperun(false),
   typeirun(false),
   cleanlyclosed(false) {
+  // Share affinity key with parent SiteLogic so events are processed on same worker thread
+  affinitykey = sl->getAffinityKey();
+}
 
+int FTPConn::getAffinityKey() const {
+  return sl->getAffinityKey();
+}
+
+int FTPConn::ownerAffinityKey() const {
+  return sl->getAffinityKey();
 }
 
 FTPConn::~FTPConn() {

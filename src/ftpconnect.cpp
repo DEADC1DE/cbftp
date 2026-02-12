@@ -35,6 +35,10 @@ FTPConnect::~FTPConnect() {
   free(databuf);
 }
 
+int FTPConnect::getAffinityKey() const {
+  return owner->ownerAffinityKey();
+}
+
 void FTPConnect::FDInterConnecting(int sockid, const std::string& addr) {
   resolvedaddr.host = addr;
   resolvedaddr.brackets = addr.find(":") != std::string::npos && resolvedaddr.port != 21;

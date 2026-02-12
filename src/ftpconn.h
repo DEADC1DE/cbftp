@@ -177,12 +177,14 @@ class FTPConn : private Core::EventReceiver, public FTPConnectOwner {
     void doMKD(const Path& path, const std::shared_ptr<FileList>& fl, const std::shared_ptr<CommandOwner>& co);
     void parseXDUPEData();
     void finishLogin();
+    int getAffinityKey() const override;
     void FDData(int sockid, char* data, unsigned int datalen) override;
     void FDDisconnected(int sockid, Core::DisconnectType reason, const std::string& details) override;
     void FDSSLSuccess(int sockid, const std::string& cipher) override;
     void ftpConnectInfo(int id, const std::string& info) override;
     void ftpConnectSuccess(int id, const Address& addr) override;
     void ftpConnectFail(int id) override;
+    int ownerAffinityKey() const override;
     void tick(int message) override;
   public:
     int getId() const;

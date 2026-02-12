@@ -17,6 +17,7 @@ public:
   FTPConnect(int id, FTPConnectOwner* owner, const Address& addr, Proxy* proxy, bool primary, bool implicittls);
   ~FTPConnect();
   int getId() const;
+  int getAffinityKey() const override;
   int handedOver();
   Address getAddress() const;
   bool isPrimary() const;
