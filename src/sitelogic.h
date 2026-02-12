@@ -2,6 +2,7 @@
 
 #include <list>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -41,6 +42,8 @@ enum class TransferType {
 enum class Exists;
 
 class SiteLogic : public Core::EventReceiver {
+  public:
+    mutable std::recursive_mutex sitelogicmutex;
   private:
     std::shared_ptr<Site> site;
     std::vector<FTPConn *> conns;

@@ -191,6 +191,7 @@ SiteLogic::~SiteLogic() {
 }
 
 void SiteLogic::activateAll() {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   for (unsigned int i = 0; i < conns.size(); i++) {
     if (!conns[i]->isConnected()) {
       connstatetracker[i].resetIdleTime();
@@ -203,12 +204,14 @@ void SiteLogic::activateAll() {
 }
 
 void SiteLogic::disconnectAll(bool hard) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   for (unsigned int i = 0; i < conns.size(); i++) {
     disconnectConn(i, hard);
   }
 }
 
 std::shared_ptr<SiteRace> SiteLogic::addRace(const std::shared_ptr<Race>& enginerace, const std::string & section, const std::string & release, bool downloadonly) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   std::shared_ptr<SiteRace> race = std::make_shared<SiteRace>(enginerace, site->getName(), site->getSectionPath(section),
                                                               release, site->getUser(), site->getSkipList(), downloadonly);
   currentraces.push_back(race);
@@ -222,6 +225,7 @@ std::shared_ptr<SiteRace> SiteLogic::addRace(const std::shared_ptr<Race>& engine
 }
 
 void SiteLogic::resetRace(const std::shared_ptr<SiteRace> & race) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   bool current = false;
   for (const std::shared_ptr<SiteRace> & currentrace : currentraces) {
     if (currentrace == race) {
@@ -236,6 +240,7 @@ void SiteLogic::resetRace(const std::shared_ptr<SiteRace> & race) {
 }
 
 void SiteLogic::addTransferJob(std::shared_ptr<SiteTransferJob> & tj) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   bool alreadyadded = false;
   for (std::list<std::shared_ptr<SiteTransferJob> >::iterator it = transferjobs.begin(); it != transferjobs.end(); ++it) {
     if (*it == tj) {
@@ -250,6 +255,7 @@ void SiteLogic::addTransferJob(std::shared_ptr<SiteTransferJob> & tj) {
 }
 
 void SiteLogic::tick(int message) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   unsigned long long int prevtime = currtime;
   currtime += TICK_INTERVAL;
   int activateslots = 0;
@@ -328,34 +334,42 @@ void SiteLogic::tick(int message) {
 }
 
 void SiteLogic::connectFailed(int id) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   disconnectConn(id);
 }
 
 void SiteLogic::userDenied(int id) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   disconnectConn(id);
 }
 
 void SiteLogic::userDeniedSiteFull(int id) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   connstatetracker[id].delayedCommand("reconnect", SLEEP_DELAY, true);
 }
 
 void SiteLogic::userDeniedSimultaneousLogins(int id) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   conns[id]->doUSER(true);
 }
 
 void SiteLogic::loginKillFailed(int id) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   disconnectConn(id);
 }
 
 void SiteLogic::passDenied(int id) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   disconnectConn(id);
 }
 
 void SiteLogic::TLSFailed(int id) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   disconnectConn(id);
 }
 
 void SiteLogic::listRefreshed(int id) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   connstatetracker[id].resetIdleTime();
   global->getStatistics()->addFileListRefresh();
   const std::shared_ptr<FileList>& fl = conns[id]->currentFileList();
@@ -400,8 +414,8 @@ void SiteLogic::listRefreshed(int id) {
     }
   }
   if (!!currentco) {
-    global->getEngine()->jobFileListRefreshed(this, currentco, fl);
-    global->getEngine()->raceActionRequest();
+    global->getEngine()->asyncJobFileListRefreshed(this, currentco, fl);
+    global->getEngine()->asyncRaceActionRequest();
   }
   handleConnection(id);
 }
@@ -514,6 +528,7 @@ bool SiteLogic::makeTargetDirectory(int id, bool includinglast, const std::share
 }
 
 void SiteLogic::commandSuccess(int id, FTPConnState state) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   connstatetracker[id].resetIdleTime();
   std::list<SiteLogicRequest>::iterator it;
   if (!refreshgovernor.refreshAllowed() && refreshgovernor.immediateRefreshAllowed()) {
@@ -738,10 +753,12 @@ void SiteLogic::commandSuccess(int id, FTPConnState state) {
 }
 
 void SiteLogic::commandFail(int id) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   commandFail(id, FailureType::UNDEFINED);
 }
 
 void SiteLogic::commandFail(int id, FailureType failuretype) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   connstatetracker[id].resetIdleTime();
   FTPConnState state = conns[id]->getState();
   if (!refreshgovernor.refreshAllowed() && refreshgovernor.immediateRefreshAllowed()) {
@@ -835,8 +852,8 @@ void SiteLogic::commandFail(int id, FailureType failuretype) {
       }
       if (filelistupdated) {
         if (currentco && currentfl) {
-          global->getEngine()->jobFileListRefreshed(this, currentco, currentfl);
-          global->getEngine()->raceActionRequest();
+          global->getEngine()->asyncJobFileListRefreshed(this, currentco, currentfl);
+          global->getEngine()->asyncRaceActionRequest();
         }
         handleConnection(id);
         return;
@@ -1050,15 +1067,17 @@ void SiteLogic::reportTransferErrorAndFinish(int id, int type, int err) {
     for (std::list<std::string>::const_iterator it = xdupelist.begin(); it != xdupelist.end(); it++) {
       fl->touchFile(*it, "XDUPE");
     }
-    global->getEngine()->jobFileListRefreshed(this, co, fl);
+    global->getEngine()->asyncJobFileListRefreshed(this, co, fl);
   }
 }
 
 void SiteLogic::gotPath(int id, const std::string & path) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   connstatetracker[id].resetIdleTime();
 }
 
 void SiteLogic::rawCommandResultRetrieved(int id, const std::string & result) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   connstatetracker[id].resetIdleTime();
   rawcommandrawbuf->write(result);
   if (connstatetracker[id].hasRequest()) {
@@ -1071,6 +1090,7 @@ void SiteLogic::rawCommandResultRetrieved(int id, const std::string & result) {
 }
 
 void SiteLogic::gotPassiveAddress(int id, const std::string & host, int port) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   connstatetracker[id].resetIdleTime();
   if (connstatetracker[id].transferInitialized()) {
     connstatetracker[id].getTransferMonitor()->passiveReady(host, port);
@@ -1081,10 +1101,11 @@ void SiteLogic::gotPassiveAddress(int id, const std::string & host, int port) {
 }
 
 void SiteLogic::timedout(int id) {
-
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
 }
 
 void SiteLogic::disconnected(int id) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   cleanupConnection(id);
   if (connstatetracker[id].isLoggedIn() && !connstatetracker[id].isQuitting()) {
     loggedin--;
@@ -1094,6 +1115,7 @@ void SiteLogic::disconnected(int id) {
 }
 
 void SiteLogic::activateOne() {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   for (unsigned int i = 0; i < conns.size(); i++) {
     if (connstatetracker[i].isLoggedIn() && !connstatetracker[i].isLocked() &&
         !conns[i]->isProcessing())
@@ -1114,6 +1136,7 @@ void SiteLogic::activateOne() {
 }
 
 void SiteLogic::haveConnectedActivate(unsigned int toactivate) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   int remaining = toactivate;
   for (unsigned int i = 0; i < conns.size() && remaining > 0; i++) {
     if (connstatetracker[i].isLoggedIn() && !connstatetracker[i].isLocked() &&
@@ -1172,7 +1195,7 @@ void SiteLogic::handlePostUpload(int id, const std::shared_ptr<FileList>& fl) {
       return;
     }
   }
-  global->getEngine()->raceActionRequest();
+  global->getEngine()->asyncRaceActionRequest();
   handleConnection(id);
 }
 
@@ -1183,7 +1206,7 @@ void SiteLogic::handlePostDownload(int id) {
       return;
     }
   }
-  global->getEngine()->raceActionRequest();
+  global->getEngine()->asyncRaceActionRequest();
   handleConnection(id);
 }
 
@@ -1225,7 +1248,7 @@ bool SiteLogic::handleSpreadJobs(int id, bool requestaction) {
       return true;
     }
     if (requestaction) {
-      global->getEngine()->raceActionRequest();
+      global->getEngine()->asyncRaceActionRequest();
       return true;
     }
   }
@@ -1270,10 +1293,7 @@ bool SiteLogic::handleTransferJobs(int id) {
     }
   }
   for (std::list<std::shared_ptr<SiteTransferJob> >::iterator it = targetjobs.begin(); it != targetjobs.end(); it++) {
-    if (global->getEngine()->transferJobActionRequest(*it)) {
-      handleConnection(id);
-      return true;
-    }
+    global->getEngine()->asyncTransferJobActionRequest(*it);
   }
   return false;
 }
@@ -1673,6 +1693,7 @@ void SiteLogic::initTransfer(int id) {
 }
 
 int SiteLogic::requestFileList(RequestCallback* cb, const Path & path) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   int requestid = requestidcounter++;
   requests.emplace_back(cb, requestid, REQ_FILELIST, path.toString());
   activateOne();
@@ -1680,6 +1701,7 @@ int SiteLogic::requestFileList(RequestCallback* cb, const Path & path) {
 }
 
 int SiteLogic::requestDownloadFile(RequestCallback* cb, const Path& path, const std::string& file, bool inmemory) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   int requestid = requestidcounter++;
   requests.emplace_back(cb, requestid, REQ_DOWNLOAD_FILE_STAGE1, path.toString(), file, inmemory);
   activateOne();
@@ -1687,6 +1709,7 @@ int SiteLogic::requestDownloadFile(RequestCallback* cb, const Path& path, const 
 }
 
 int SiteLogic::requestDownloadFile(RequestCallback* cb, const std::shared_ptr<FileList>& fl, const std::string& file, bool inmemory) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   int requestid = requestidcounter++;
   DownloadFileData* dlfdata = new DownloadFileData();
   dlfdata->fl = fl;
@@ -1698,10 +1721,12 @@ int SiteLogic::requestDownloadFile(RequestCallback* cb, const std::shared_ptr<Fi
 }
 
 int SiteLogic::requestRawCommand(RequestCallback* cb, const std::string & command) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   return requestRawCommand(cb, site->getBasePath(), command);
 }
 
 int SiteLogic::requestRawCommand(RequestCallback* cb, const Path & path, const std::string & command) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   int requestid = requestidcounter++;
   std::string expandedcommand = expandVariables(command);
   requests.emplace_back(cb, requestid, REQ_RAW, path.toString(), expandedcommand);
@@ -1710,6 +1735,7 @@ int SiteLogic::requestRawCommand(RequestCallback* cb, const Path & path, const s
 }
 
 int SiteLogic::requestWipe(RequestCallback* cb, const Path & path, bool recursive) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   int requestid = requestidcounter++;
   if (recursive) {
     requests.emplace_back(cb, requestid, REQ_WIPE_RECURSIVE, path.toString());
@@ -1722,6 +1748,7 @@ int SiteLogic::requestWipe(RequestCallback* cb, const Path & path, bool recursiv
 }
 
 int SiteLogic::requestDelete(RequestCallback* cb, const Path& path, bool recursive, bool allfiles) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   int requestid = requestidcounter++;
   if (recursive) {
     int req = allfiles ? REQ_DEL_RECURSIVE : REQ_DEL_OWN;
@@ -1735,6 +1762,7 @@ int SiteLogic::requestDelete(RequestCallback* cb, const Path& path, bool recursi
 }
 
 int SiteLogic::requestNuke(RequestCallback* cb, const Path & path, int multiplier, const std::string & reason) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   int requestid = requestidcounter++;
   requests.emplace_back(cb, requestid, REQ_NUKE, path.toString(), reason, multiplier);
   activateOne();
@@ -1742,6 +1770,7 @@ int SiteLogic::requestNuke(RequestCallback* cb, const Path & path, int multiplie
 }
 
 int SiteLogic::requestOneIdle(RequestCallback* cb) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   int requestid = requestidcounter++;
   requests.emplace_back(cb, requestid, REQ_IDLE, site->getBasePath().toString(), site->getMaxIdleTime());
   activateOne();
@@ -1749,6 +1778,7 @@ int SiteLogic::requestOneIdle(RequestCallback* cb) {
 }
 
 int SiteLogic::requestAllIdle(RequestCallback* cb, const Path & path, int idletime) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   if (!idletime) {
     idletime = site->getMaxIdleTime();
   }
@@ -1764,10 +1794,12 @@ int SiteLogic::requestAllIdle(RequestCallback* cb, const Path & path, int idleti
 }
 
 int SiteLogic::requestAllIdle(RequestCallback* cb, int idletime) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   return requestAllIdle(cb, site->getBasePath(), idletime);
 }
 
 int SiteLogic::requestMakeDirectory(RequestCallback* cb, const Path& path, const std::string & dirname) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   int requestid = requestidcounter++;
   Path dirpath(dirname);
   if (dirpath.isRelative()) {
@@ -1781,6 +1813,7 @@ int SiteLogic::requestMakeDirectory(RequestCallback* cb, const Path& path, const
 }
 
 int SiteLogic::requestMove(RequestCallback* cb, const Path& srcpath, const Path& dstpath) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   int requestid = requestidcounter++;
   requests.emplace_back(cb, requestid, REQ_MOVE, srcpath.toString(), dstpath.toString());
   activateOne();
@@ -1788,6 +1821,7 @@ int SiteLogic::requestMove(RequestCallback* cb, const Path& srcpath, const Path&
 }
 
 bool SiteLogic::requestReady(int requestid) const {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   std::list<SiteLogicRequestReady>::const_iterator it;
   for (it = requestsready.begin(); it != requestsready.end(); it++) {
     if (it->getId() == requestid) {
@@ -1798,6 +1832,7 @@ bool SiteLogic::requestReady(int requestid) const {
 }
 
 void SiteLogic::abortRace(const std::shared_ptr<SiteRace> & race) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   if (!race) {
     return;
   }
@@ -1835,6 +1870,7 @@ void SiteLogic::removeRace(const std::shared_ptr<SiteRace>& race, bool aborttran
 }
 
 void SiteLogic::abortTransfers(const std::shared_ptr<CommandOwner> & co) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   for (unsigned int i = 0; i < connstatetracker.size(); i++) {
     if (connstatetracker[i].isLoggedIn() && connstatetracker[i].isTransferLocked() &&
         connstatetracker[i].getCommandOwner() == co)
@@ -1847,6 +1883,7 @@ void SiteLogic::abortTransfers(const std::shared_ptr<CommandOwner> & co) {
 }
 
 FileListData* SiteLogic::getFileListData(int requestid) const {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   std::list<SiteLogicRequestReady>::const_iterator it;
   for (it = requestsready.begin(); it != requestsready.end(); it++) {
     if (it->getId() == requestid) {
@@ -1857,6 +1894,7 @@ FileListData* SiteLogic::getFileListData(int requestid) const {
 }
 
 DownloadFileData* SiteLogic::getDownloadFileData(int requestid) const {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   std::list<SiteLogicRequestReady>::const_iterator it;
   for (it = requestsready.begin(); it != requestsready.end(); it++) {
     if (it->getId() == requestid) {
@@ -1867,6 +1905,7 @@ DownloadFileData* SiteLogic::getDownloadFileData(int requestid) const {
 }
 
 void* SiteLogic::getOngoingRequestData(int requestid) const {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   for (size_t i = 0; i < connstatetracker.size(); ++i) {
     if (connstatetracker[i].hasRequest()) {
       const std::shared_ptr<SiteLogicRequest>& request = connstatetracker[i].getRequest();
@@ -1879,6 +1918,7 @@ void* SiteLogic::getOngoingRequestData(int requestid) const {
 }
 
 std::string SiteLogic::getRawCommandResult(int requestid) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   std::list<SiteLogicRequestReady>::iterator it;
   for (it = requestsready.begin(); it != requestsready.end(); it++) {
     if (it->getId() == requestid) {
@@ -1890,6 +1930,7 @@ std::string SiteLogic::getRawCommandResult(int requestid) {
 }
 
 bool SiteLogic::requestStatus(int requestid) const {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   std::list<SiteLogicRequestReady>::const_iterator it;
   for (it = requestsready.begin(); it != requestsready.end(); it++) {
     if (it->getId() == requestid) {
@@ -1900,6 +1941,7 @@ bool SiteLogic::requestStatus(int requestid) const {
 }
 
 bool SiteLogic::finishRequest(int requestid) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   std::list<SiteLogicRequestReady>::iterator it;
   for (it = requestsready.begin(); it != requestsready.end(); it++) {
     if (it->getId() == requestid) {
@@ -1925,10 +1967,12 @@ bool SiteLogic::finishRequest(int requestid) {
 }
 
 const std::shared_ptr<Site> & SiteLogic::getSite() const {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   return site;
 }
 
 std::shared_ptr<SiteRace> SiteLogic::getRace(const std::string & race) const {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   for (std::vector<std::shared_ptr<SiteRace>>::const_iterator it = currentraces.begin(); it != currentraces.end(); it++) {
     if ((*it)->getName().compare(race) == 0) {
       return *it;
@@ -1947,10 +1991,12 @@ std::shared_ptr<SiteRace> SiteLogic::getRace(unsigned int id) const {
 }
 
 bool SiteLogic::lockDownloadConn(const std::shared_ptr<FileList>& fl, int* ret, const std::shared_ptr<CommandOwner>& co, TransferMonitor* tm) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   return lockTransferConn(fl, ret, tm, co, true);
 }
 
 bool SiteLogic::lockUploadConn(const std::shared_ptr<FileList>& fl, int* ret, const std::shared_ptr<CommandOwner>& co, TransferMonitor* tm) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   return lockTransferConn(fl, ret, tm, co, false);
 }
 
@@ -2010,6 +2056,7 @@ bool SiteLogic::lockTransferConn(const std::shared_ptr<FileList>& fl, int* ret, 
 }
 
 void SiteLogic::returnConn(int id, bool istransfer) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   if (connstatetracker[id].isTransferLocked() && connstatetracker[id].getTransferType() == CST_DOWNLOAD) {
     transferComplete(id, true);
   }
@@ -2026,6 +2073,7 @@ void SiteLogic::returnConn(int id, bool istransfer) {
 }
 
 void SiteLogic::registerDownloadLock(int id, const std::shared_ptr<FileList>& fl, const std::shared_ptr<CommandOwner>& co, TransferMonitor* tm) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   TransferType type = getTransferType(true, co);
   available++;
   assert(getSlot(true, type));
@@ -2035,6 +2083,7 @@ void SiteLogic::registerDownloadLock(int id, const std::shared_ptr<FileList>& fl
 }
 
 void SiteLogic::setNumConnections(unsigned int num) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   while (num < conns.size()) {
     bool success = false;
     for (unsigned int i = 0; i < conns.size(); i++) {
@@ -2080,6 +2129,7 @@ void SiteLogic::setNumConnections(unsigned int num) {
 }
 
 int SiteLogic::downloadSlotsAvailable(TransferType type) const {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   if (!available) {
     return 0;
   }
@@ -2110,10 +2160,12 @@ int SiteLogic::downloadSlotsAvailable(TransferType type) const {
 }
 
 bool SiteLogic::downloadSlotAvailable(TransferType type) const {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   return downloadSlotsAvailable(type) > 0;
 }
 
 bool SiteLogic::uploadSlotAvailable() const {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   if (!available) {
     return false;
   }
@@ -2125,6 +2177,7 @@ bool SiteLogic::uploadSlotAvailable() const {
 }
 
 int SiteLogic::slotsAvailable() const {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   return available;
 }
 
@@ -2165,10 +2218,12 @@ bool SiteLogic::getSlot(bool isdownload, TransferType type) {
 }
 
 void SiteLogic::pushPotential(int score, const std::string & file, const std::shared_ptr<SiteLogic> & dst) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   ptrack->pushPotential(score, file, dst, dst->getSite()->getMaxUp());
 }
 
 bool SiteLogic::potentialCheck(int score, TransferType type) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   int dnavail = downloadSlotsAvailable(type);
   int max = ptrack->getMaxAvailablePotential();
   float factor = 0;
@@ -2194,15 +2249,18 @@ bool SiteLogic::potentialCheck(int score, TransferType type) {
 }
 
 int SiteLogic::getPotential() {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   return ptrack->getMaxAvailablePotential();
 }
 
 void SiteLogic::siteUpdated() {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   refreshgovernor.update();
   setNumConnections(site->getMaxLogins());
 }
 
 void SiteLogic::updateName() {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   for (unsigned int i = 0; i < conns.size(); i++) {
     conns[i]->updateName();
   }
@@ -2210,18 +2268,22 @@ void SiteLogic::updateName() {
 }
 
 int SiteLogic::getCurrLogins() const {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   return loggedin;
 }
 
 int SiteLogic::getCurrDown() const {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   return slotsdn;
 }
 
 int SiteLogic::getCurrUp() const {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   return slotsup;
 }
 
 int SiteLogic::getCleanlyClosedConnectionsCount() const {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   int count = 0;
   for (int i = 0; i < (int)conns.size(); ++i) {
     if (conns[i]->isCleanlyClosed()) {
@@ -2232,6 +2294,7 @@ int SiteLogic::getCleanlyClosedConnectionsCount() const {
 }
 
 void SiteLogic::connectConn(int id) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   if (!conns[id]->isConnected()) {
     connstatetracker[id].resetIdleTime();
     conns[id]->login();
@@ -2239,6 +2302,7 @@ void SiteLogic::connectConn(int id) {
 }
 
 void SiteLogic::disconnectConn(int id, bool hard) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   connstatetracker[id].resetIdleTime();
   cleanupConnection(id);
   if (conns[id]->isConnected()) {
@@ -2287,6 +2351,7 @@ void SiteLogic::cleanupConnection(int id) {
 }
 
 void SiteLogic::finishTransferGracefullyPrematurely(int id) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   assert(connstatetracker[id].hasTransfer() &&
                !connstatetracker[id].isListLocked());
   switch (connstatetracker[id].getTransferType()) {
@@ -2305,6 +2370,7 @@ void SiteLogic::finishTransferGracefullyPrematurely(int id) {
 }
 
 void SiteLogic::listCompleted(int id, int storeid, const std::shared_ptr<FileList>& fl, const std::shared_ptr<CommandOwner> & co) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   const Core::BinaryData& data = global->getLocalStorage()->getStoreContent(storeid);
   conns[id]->setListData(co, fl);
   conns[id]->parseFileList((char *) &data[0], data.size());
@@ -2313,6 +2379,7 @@ void SiteLogic::listCompleted(int id, int storeid, const std::shared_ptr<FileLis
 }
 
 void SiteLogic::downloadCompleted(int id, int storeid, const std::shared_ptr<FileList>& fl, const std::shared_ptr<CommandOwner> & co) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   if (!connstatetracker[id].hasRequest()) {
     return;
   }
@@ -2329,6 +2396,7 @@ void SiteLogic::downloadCompleted(int id, int storeid, const std::shared_ptr<Fil
 }
 
 void SiteLogic::issueRawCommand(unsigned int id, const std::string & command) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   int requestid = requestidcounter++;
   std::string expandedcommand = expandVariables(command);
   SiteLogicRequest request(nullptr, requestid, REQ_RAW, conns[id]->getCurrentPath().toString(), command);
@@ -2344,14 +2412,17 @@ void SiteLogic::issueRawCommand(unsigned int id, const std::string & command) {
 }
 
 RawBuffer * SiteLogic::getRawCommandBuffer() const {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   return rawcommandrawbuf;
 }
 
 RawBuffer * SiteLogic::getAggregatedRawBuffer() const {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   return aggregatedrawbuf;
 }
 
 void SiteLogic::raceGlobalComplete(const std::shared_ptr<SiteRace> & sr) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   removeRace(sr, false);
   if (site->getStayLoggedIn()) {
     return;
@@ -2373,6 +2444,7 @@ void SiteLogic::raceGlobalComplete(const std::shared_ptr<SiteRace> & sr) {
 }
 
 void SiteLogic::raceLocalComplete(const std::shared_ptr<SiteRace> & sr, int uploadslotsleft, bool reportdone) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   sr->complete(reportdone);
   if (site->getStayLoggedIn()) {
     return;
@@ -2407,10 +2479,12 @@ void SiteLogic::raceLocalComplete(const std::shared_ptr<SiteRace> & sr, int uplo
 }
 
 const std::vector<FTPConn *> * SiteLogic::getConns() const {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   return &conns;
 }
 
 FTPConn * SiteLogic::getConn(int id) const {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   std::vector<FTPConn *>::const_iterator it;
   for (it = conns.begin(); it != conns.end(); it++) {
     if ((*it)->getId() == id) {
@@ -2421,6 +2495,7 @@ FTPConn * SiteLogic::getConn(int id) const {
 }
 
 std::string SiteLogic::getStatus(int id) const {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   int idletime = connstatetracker[id].getTimePassed()/1000;
   if (!conns[id]->isProcessing() && conns[id]->isConnected() && idletime) {
     return "IDLE " + std::to_string(idletime) + "s";
@@ -2429,26 +2504,31 @@ std::string SiteLogic::getStatus(int id) const {
 }
 
 void SiteLogic::preparePassiveTransfer(int id, const std::string& file, bool fxp, bool ipv6, bool ssl, bool sslclient) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   connstatetracker[id].setTransfer(file, fxp, ipv6, ssl, sslclient);
   initTransfer(id);
 }
 
 void SiteLogic::prepareActiveTransfer(int id, const std::string& file, bool fxp, bool ipv6, const std::string& host, int port, bool ssl, bool sslclient) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   connstatetracker[id].setTransfer(file, fxp, ipv6, host, port, ssl, sslclient);
   initTransfer(id);
 }
 
 void SiteLogic::preparePassiveList(int id, TransferMonitor* tmb, bool ipv6, bool ssl) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   connstatetracker[id].setList(tmb, ipv6, ssl);
   initTransfer(id);
 }
 
 void SiteLogic::prepareActiveList(int id, TransferMonitor* tmb, bool ipv6, const std::string & host, int port, bool ssl) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   connstatetracker[id].setList(tmb, ipv6, host, port, ssl);
   initTransfer(id);
 }
 
 void SiteLogic::download(int id) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   if (connstatetracker[id].transferInitialized()) {
     if (!connstatetracker[id].getTransferAborted()) {
       conns[id]->doRETR(connstatetracker[id].getTransferFile());
@@ -2465,6 +2545,7 @@ void SiteLogic::download(int id) {
 }
 
 void SiteLogic::upload(int id) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   if (connstatetracker[id].transferInitialized()) {
     if (!connstatetracker[id].getTransferAborted()) {
       conns[id]->doSTOR(connstatetracker[id].getTransferFile());
@@ -2481,10 +2562,12 @@ void SiteLogic::upload(int id) {
 }
 
 void SiteLogic::list(int id) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   conns[id]->doLIST();
 }
 
 void SiteLogic::listAll(int id) {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   conns[id]->doLISTa();
 }
 
@@ -2546,6 +2629,7 @@ void SiteLogic::passiveModeCommand(int id) {
 }
 
 const ConnStateTracker * SiteLogic::getConnStateTracker(int id) const {
+  std::lock_guard<std::recursive_mutex> lock(sitelogicmutex);
   return &connstatetracker[id];
 }
 
