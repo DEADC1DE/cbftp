@@ -156,7 +156,7 @@ void IOManager::stop() {
 
 void IOManager::tick(int message) {
   bool closeFd = false;
-  std::lock_guard<std::mutex> lock(socketinfomaplock);
+  std::unique_lock<std::shared_mutex> lock(socketinfomaplock);
   for (auto& it : connecttimemap) {
     int& timeelapsed = it.second;
     timeelapsed += TICKPERIOD;
@@ -247,7 +247,7 @@ int IOManager::registerTCPClientSocket(EventReceiver* er,
   ResolverResult result = resolveHost(sockid, false);
   resolving = result == ResolverResult::WOULD_BLOCK;
   if (result == ResolverResult::SUCCESS) {
-    std::lock_guard<std::mutex> lock(socketinfomaplock);
+    std::unique_lock<std::shared_mutex> lock(socketinfomaplock);
     handleTCPNameResolution(socketinfo);
   }
   else if (result == ResolverResult::WOULD_BLOCK) {
@@ -380,7 +380,7 @@ int IOManager::registerTCPServerSocket(EventReceiver* er, int port, AddressFamil
       return -1;
     }
   }
-  std::lock_guard<std::mutex> lock(socketinfomaplock);
+  std::unique_lock<std::shared_mutex> lock(socketinfomaplock);
   int sockid = sockidcounter++;
   SocketInfo& socketinfo = socketinfomap[sockid];
   socketinfo.fd = sockfd;
@@ -393,7 +393,7 @@ int IOManager::registerTCPServerSocket(EventReceiver* er, int port, AddressFamil
 }
 
 int IOManager::registerTCPServerSocketExternalFD(EventReceiver* er, int sockfd, AddressFamily addrfam) {
-  std::lock_guard<std::mutex> lock(socketinfomaplock);
+  std::unique_lock<std::shared_mutex> lock(socketinfomaplock);
   int sockid = sockidcounter++;
   SocketInfo& socketinfo = socketinfomap[sockid];
   socketinfo.fd = sockfd;
@@ -406,7 +406,7 @@ int IOManager::registerTCPServerSocketExternalFD(EventReceiver* er, int sockfd, 
 }
 
 void IOManager::registerTCPServerClientSocket(EventReceiver* er, int sockid, bool listenimmediately) {
-  std::lock_guard<std::mutex> lock(socketinfomaplock);
+  std::unique_lock<std::shared_mutex> lock(socketinfomaplock);
   socketinfomap[sockid].receiver = er;
   socketinfomap[sockid].listenimmediately = listenimmediately;
   if (listenimmediately) {
@@ -415,7 +415,7 @@ void IOManager::registerTCPServerClientSocket(EventReceiver* er, int sockid, boo
 }
 
 int IOManager::registerExternalFD(EventReceiver* er, int fd) {
-  std::lock_guard<std::mutex> lock(socketinfomaplock);
+  std::unique_lock<std::shared_mutex> lock(socketinfomaplock);
   int sockid = sockidcounter++;
   SocketInfo& socketinfo = socketinfomap[sockid];
   socketinfo.fd = fd;
@@ -469,7 +469,7 @@ int IOManager::registerUDPServerSocket(EventReceiver* er, int port, AddressFamil
       return -1;
     }
   }
-  std::lock_guard<std::mutex> lock(socketinfomaplock);
+  std::unique_lock<std::shared_mutex> lock(socketinfomaplock);
   int sockid = sockidcounter++;
   SocketInfo& socketinfo = socketinfomap[sockid];
   socketinfo.fd = sockfd;
@@ -482,7 +482,7 @@ int IOManager::registerUDPServerSocket(EventReceiver* er, int port, AddressFamil
 }
 
 void IOManager::adopt(EventReceiver* er, int sockid) {
-  std::lock_guard<std::mutex> lock(socketinfomaplock);
+  std::unique_lock<std::shared_mutex> lock(socketinfomaplock);
   socketinfomap[sockid].receiver = er;
 }
 
@@ -491,7 +491,7 @@ void IOManager::negotiateSSLConnect(int sockid) {
 }
 
 void IOManager::negotiateSSLConnect(int sockid, int sessionkey) {
-  std::lock_guard<std::mutex> lock(socketinfomaplock);
+  std::unique_lock<std::shared_mutex> lock(socketinfomaplock);
   auto it = socketinfomap.find(sockid);
   if (it != socketinfomap.end() &&
       (it->second.type == SocketType::TCP_PLAIN || it->second.type == SocketType::TCP_PLAIN_LISTEN))
@@ -508,7 +508,7 @@ void IOManager::negotiateSSLConnect(int sockid, int sessionkey) {
 }
 
 void IOManager::negotiateSSLConnectParent(int sockid, int parentsockid) {
-  std::lock_guard<std::mutex> lock(socketinfomaplock);
+  std::unique_lock<std::shared_mutex> lock(socketinfomaplock);
   auto it = socketinfomap.find(sockid);
   if (it != socketinfomap.end() &&
       (it->second.type == SocketType::TCP_PLAIN || it->second.type == SocketType::TCP_PLAIN_LISTEN))
@@ -525,7 +525,7 @@ void IOManager::negotiateSSLConnectParent(int sockid, int parentsockid) {
 }
 
 void IOManager::negotiateSSLAccept(int sockid) {
-  std::lock_guard<std::mutex> lock(socketinfomaplock);
+  std::unique_lock<std::shared_mutex> lock(socketinfomaplock);
   auto it = socketinfomap.find(sockid);
   if (it != socketinfomap.end() &&
       (it->second.type == SocketType::TCP_PLAIN || it->second.type == SocketType::TCP_PLAIN_LISTEN))
@@ -562,7 +562,7 @@ bool IOManager::sendData(int sockid, const std::vector<char>& data) {
 bool IOManager::sendData(int sockid, const char* data, unsigned int datalen) {
   assert(datalen <= MAX_SEND_BUFFER);
   unsigned int sendblocksize = sendblockpool->blockSize();
-  std::lock_guard<std::mutex> lock(socketinfomaplock);
+  std::unique_lock<std::shared_mutex> lock(socketinfomaplock);
   auto it = socketinfomap.find(sockid);
   if (it == socketinfomap.end()) {
     return true;
@@ -585,7 +585,7 @@ bool IOManager::sendData(int sockid, const char* data, unsigned int datalen) {
 }
 
 void IOManager::closeSocket(int sockid) {
-  std::lock_guard<std::mutex> lock(socketinfomaplock);
+  std::unique_lock<std::shared_mutex> lock(socketinfomaplock);
   auto it = socketinfomap.find(sockid);
   if (it == socketinfomap.end()) {
     return;
@@ -599,7 +599,7 @@ void IOManager::closeSocket(int sockid) {
 }
 
 void IOManager::closeSocketNow(int sockid) {
-  std::lock_guard<std::mutex> lock(socketinfomaplock);
+  std::unique_lock<std::shared_mutex> lock(socketinfomaplock);
   closeSocketIntern(sockid);
 }
 
@@ -660,7 +660,7 @@ ResolverResult IOManager::resolveHost(int sockid, bool mayblock) {
   socketinfomaplock.unlock();
   struct addrinfo* result;
   int returncode = getaddrinfo(addr.c_str(), std::to_string(port).c_str(), &request, &result);
-  std::lock_guard<std::mutex> lock(socketinfomaplock);
+  std::unique_lock<std::shared_mutex> lock(socketinfomaplock);
   it = socketinfomap.find(sockid);
   if (it == socketinfomap.end()) {
     if (!returncode) {
@@ -687,7 +687,7 @@ ResolverResult IOManager::resolveHost(int sockid, bool mayblock) {
 
 void IOManager::asyncTaskComplete(int type, int sockid) {
   assert(type == static_cast<int>(AsyncTaskType::HOST_RESOLUTION));
-  std::lock_guard<std::mutex> lock(socketinfomaplock);
+  std::unique_lock<std::shared_mutex> lock(socketinfomaplock);
   auto it = socketinfomap.find(sockid);
   if (it == socketinfomap.end()) {
       return;
@@ -697,7 +697,7 @@ void IOManager::asyncTaskComplete(int type, int sockid) {
 }
 
 std::string IOManager::getCipher(int sockid) const {
-  std::lock_guard<std::mutex> lock(socketinfomaplock);
+  std::shared_lock<std::shared_mutex> lock(socketinfomaplock);
   auto it = socketinfomap.find(sockid);
   if (it == socketinfomap.end() || it->second.ssl == nullptr || it->second.type != SocketType::TCP_SSL) {
     return "?";
@@ -707,7 +707,7 @@ std::string IOManager::getCipher(int sockid) const {
 }
 
 bool IOManager::getSSLSessionReuse(int sockid) const {
-  std::lock_guard<std::mutex> lock(socketinfomaplock);
+  std::shared_lock<std::shared_mutex> lock(socketinfomaplock);
   auto it = socketinfomap.find(sockid);
   if (it != socketinfomap.end()) {
     return it->second.parentid != -1 || it->second.sessionkey != -1;
@@ -716,7 +716,7 @@ bool IOManager::getSSLSessionReuse(int sockid) const {
 }
 
 bool IOManager::getSSLSessionReused(int sockid) const {
-  std::lock_guard<std::mutex> lock(socketinfomaplock);
+  std::shared_lock<std::shared_mutex> lock(socketinfomaplock);
   auto it = socketinfomap.find(sockid);
   if (it == socketinfomap.end() || it->second.ssl == nullptr || it->second.type != SocketType::TCP_SSL) {
     return false;
@@ -725,7 +725,7 @@ bool IOManager::getSSLSessionReused(int sockid) const {
 }
 
 int IOManager::getReusedSessionKey(int sockid) const {
-  std::lock_guard<std::mutex> lock(socketinfomaplock);
+  std::shared_lock<std::shared_mutex> lock(socketinfomaplock);
   auto it = socketinfomap.find(sockid);
   if (it != socketinfomap.end()) {
     return it->second.sessionkey;
@@ -734,7 +734,7 @@ int IOManager::getReusedSessionKey(int sockid) const {
 }
 
 std::string IOManager::getSocketAddress(int sockid) const {
-  std::lock_guard<std::mutex> lock(socketinfomaplock);
+  std::shared_lock<std::shared_mutex> lock(socketinfomaplock);
   auto it = socketinfomap.find(sockid);
   if (it != socketinfomap.end()) {
     return it->second.addr;
@@ -743,7 +743,7 @@ std::string IOManager::getSocketAddress(int sockid) const {
 }
 
 int IOManager::getSocketPort(int sockid) const {
-  std::lock_guard<std::mutex> lock(socketinfomaplock);
+  std::shared_lock<std::shared_mutex> lock(socketinfomaplock);
   auto it = socketinfomap.find(sockid);
   if (it != socketinfomap.end()) {
     return it->second.port;
@@ -752,7 +752,7 @@ int IOManager::getSocketPort(int sockid) const {
 }
 
 int IOManager::getSocketFileDescriptor(int sockid) const {
-  std::lock_guard<std::mutex> lock(socketinfomaplock);
+  std::shared_lock<std::shared_mutex> lock(socketinfomaplock);
   auto it = socketinfomap.find(sockid);
   if (it != socketinfomap.end()) {
     return it->second.fd;
@@ -761,7 +761,7 @@ int IOManager::getSocketFileDescriptor(int sockid) const {
 }
 
 std::string IOManager::getInterfaceAddress(int sockid) const {
-  std::lock_guard<std::mutex> lock(socketinfomaplock);
+  std::shared_lock<std::shared_mutex> lock(socketinfomaplock);
   auto it = socketinfomap.find(sockid);
   if (it != socketinfomap.end()) {
     return it->second.localaddr;
@@ -770,7 +770,7 @@ std::string IOManager::getInterfaceAddress(int sockid) const {
 }
 
 StringResult IOManager::getInterfaceAddress4(int sockid) const {
-  std::lock_guard<std::mutex> lock(socketinfomaplock);
+  std::shared_lock<std::shared_mutex> lock(socketinfomaplock);
   auto it = socketinfomap.find(sockid);
   if (it != socketinfomap.end()) {
     if (it->second.addrfam == AddressFamily::IPV4) {
@@ -786,7 +786,7 @@ StringResult IOManager::getInterfaceAddress4(int sockid) const {
 }
 
 StringResult IOManager::getInterfaceAddress6(int sockid) const {
-  std::lock_guard<std::mutex> lock(socketinfomaplock);
+  std::shared_lock<std::shared_mutex> lock(socketinfomaplock);
   auto it = socketinfomap.find(sockid);
   if (it != socketinfomap.end()) {
     if (it->second.addrfam == AddressFamily::IPV6) {
@@ -803,7 +803,7 @@ StringResult IOManager::getInterfaceAddress6(int sockid) const {
 
 AddressFamily IOManager::getAddressFamily(int sockid) const {
   std::string addr = "?";
-  std::lock_guard<std::mutex> lock(socketinfomaplock);
+  std::shared_lock<std::shared_mutex> lock(socketinfomaplock);
   auto it = socketinfomap.find(sockid);
   if (it != socketinfomap.end()) {
     return it->second.addrfam;
@@ -1158,7 +1158,7 @@ void IOManager::run() {
   SSLManager::init();
   initialized.post();
   std::list<PollEvent> events;
-  std::lock_guard<std::mutex> lock(socketinfomaplock);
+  std::unique_lock<std::shared_mutex> lock(socketinfomaplock);
   while (true) {
     socketinfomaplock.unlock();
     polling.wait(events);
@@ -1440,7 +1440,7 @@ StringResult IOManager::getAddressToBind(const AddressFamily addrfam, const Sock
 }
 
 void IOManager::workerReady() {
-  std::lock_guard<std::mutex> lock(socketinfomaplock);
+  std::unique_lock<std::shared_mutex> lock(socketinfomaplock);
   for (auto& sockid : autopaused) {
     auto siit = socketinfomap.find(sockid);
     if (siit == socketinfomap.end()) {
@@ -1470,7 +1470,7 @@ void IOManager::autoPause(SocketInfo& socketinfo) {
 }
 
 void IOManager::pause(int sockid) {
-  std::lock_guard<std::mutex> lock(socketinfomaplock);
+  std::unique_lock<std::shared_mutex> lock(socketinfomaplock);
   auto it = socketinfomap.find(sockid);
   if (it == socketinfomap.end()) {
     return;
@@ -1483,7 +1483,7 @@ void IOManager::pause(int sockid) {
 }
 
 void IOManager::resume(int sockid) {
-  std::lock_guard<std::mutex> lock(socketinfomaplock);
+  std::unique_lock<std::shared_mutex> lock(socketinfomaplock);
   auto it = socketinfomap.find(sockid);
   if (it == socketinfomap.end()) {
     return;
@@ -1501,7 +1501,7 @@ void IOManager::resume(int sockid) {
 }
 
 void IOManager::setLinger(int sockid) {
-  std::lock_guard<std::mutex> lock(socketinfomaplock);
+  std::unique_lock<std::shared_mutex> lock(socketinfomaplock);
   auto it = socketinfomap.find(sockid);
   if (it == socketinfomap.end()) {
     return;
@@ -1513,7 +1513,7 @@ void IOManager::setLinger(int sockid) {
 }
 
 int IOManager::storeSession(int sockid) {
-  std::lock_guard<std::mutex> lock(socketinfomaplock);
+  std::unique_lock<std::shared_mutex> lock(socketinfomaplock);
   auto it = socketinfomap.find(sockid);
   if (it == socketinfomap.end() || !it->second.ssl) {
     return -1;
@@ -1525,7 +1525,7 @@ int IOManager::storeSession(int sockid) {
 }
 
 void IOManager::clearSession(int sessionkey) {
-  std::lock_guard<std::mutex> lock(socketinfomaplock);
+  std::unique_lock<std::shared_mutex> lock(socketinfomaplock);
   auto it = sessions.find(sessionkey);
   if (it == sessions.end()) {
     return;
@@ -1537,7 +1537,7 @@ void IOManager::clearSession(int sessionkey) {
 void IOManager::clearReusedSession(int sockid) {
   int sessionkey = -1;
   {
-    std::lock_guard<std::mutex> lock(socketinfomaplock);
+    std::unique_lock<std::shared_mutex> lock(socketinfomaplock);
     auto it = socketinfomap.find(sockid);
     if (it == socketinfomap.end() || it->second.sessionkey == -1) {
       return;

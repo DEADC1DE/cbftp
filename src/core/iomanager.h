@@ -3,6 +3,7 @@
 #include <list>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -409,7 +410,7 @@ private:
   StringResult getAddressToBind(const AddressFamily addrfam, const SocketType socktype);
   Polling polling;
   Thread<IOManager> thread;
-  mutable std::mutex socketinfomaplock;
+  mutable std::shared_mutex socketinfomaplock;
   std::unordered_map<int, SocketInfo> socketinfomap;
   std::unordered_map<int, int> connecttimemap;
   std::unordered_set<int> autopaused;
