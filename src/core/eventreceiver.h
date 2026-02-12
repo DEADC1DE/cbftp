@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <string>
 
 namespace Core {
@@ -21,6 +22,13 @@ class EventReceiver {
 public:
   EventReceiver();
   virtual ~EventReceiver();
+
+  /* Returns the affinity key for this receiver. Events for receivers with
+   * the same affinity key are guaranteed to be processed by the same worker
+   * thread. This ensures no EventReceiver is ever accessed concurrently.
+   * Override in subclasses to provide per-instance affinity.
+   */
+  virtual int getAffinityKey() const { return affinitykey; }
 
   /* tick() is called by registering for time-based events with TickPoke.
    * @param message: the message that belongs to the tick event. */
@@ -117,8 +125,12 @@ public:
   virtual void workerReady();
   void bindWorkManager(WorkManager* workManager);
 
+protected:
+  int affinitykey;
+
 private:
   WorkManager* workmanager;
+  static std::atomic<int> nextaffinitykey;
 };
 
 } // namespace Core

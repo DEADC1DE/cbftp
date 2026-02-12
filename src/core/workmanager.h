@@ -21,12 +21,46 @@ namespace Core {
 class EventReceiver;
 enum class DisconnectType;
 
+/* Per-worker state: each worker thread has its own queues and semaphore.
+ * Events are routed to workers based on receiver affinity keys.
+ */
+struct WorkerData {
+  BlockingQueue<Event> dataqueue;
+  BlockingQueue<Event> highprioqueue;
+  BlockingQueue<Event> lowprioqueue;
+  std::vector<BlockingQueue<Event>*> eventqueues;
+  Semaphore event;
+  Semaphore readdata;
+  Semaphore flush;
+  bool overloaded;
+  bool lowpriooverloaded;
+
+  WorkerData() : overloaded(false), lowpriooverloaded(false) {
+    eventqueues.push_back(&lowprioqueue);
+    eventqueues.push_back(&dataqueue);
+    eventqueues.push_back(&highprioqueue);
+  }
+};
+
+/* Helper class so Thread<> can call run() on a per-worker basis */
+class WorkerRunner {
+public:
+  WorkerRunner() : wm(nullptr), workerid(0) {}
+  void setup(class WorkManager* wm, int id) { this->wm = wm; this->workerid = id; }
+  void run();
+private:
+  class WorkManager* wm;
+  int workerid;
+};
+
 /* The WorkManager handles the main workload of an application.
  * events from IOManager (sockets / file descriptors), TickPoke (time-based events),
  * AsyncWorkers (asynchronous tasks), signal handlers etc will be
- * dispatched here and run by the internal Worker thread.
- * An application built around the WorkManager normally does not have to deal with
- * any kind of threading, locks or synchronization by itself.
+ * dispatched here and run by the internal Worker thread(s).
+ *
+ * With num_workers > 1, events are dispatched to worker threads based on
+ * the receiver's affinity key, ensuring that events for the same receiver
+ * are always processed by the same thread (no concurrent access).
  */
 class WorkManager {
 public:
@@ -37,8 +71,9 @@ public:
      * the application enters its main loop.
      * @param prefix: prefix name of the thread for debugging purposes
      * @param id: id number of the thread for debugging purposes
+     * @param num_workers: number of worker threads (0 = auto-detect from hardware)
      */
-    void init(const std::string& prefix, int id = 0);
+    void init(const std::string& prefix, int id = 0, int num_workers = 0);
 
     /* Begin stopping threads */
     void preStop();
@@ -69,19 +104,22 @@ public:
     DataBlockPool& getBlockPool();
 
     /*
-     * Does the worker consider itself overloaded (i.e. is the work queue too large)?
+     * Does any worker consider itself overloaded (i.e. is the work queue too large)?
      */
     bool overload();
 
     /*
-     * Does the worker consider itself overloaded in the low-priority queue?
+     * Does any worker consider itself overloaded in the low-priority queue?
      */
     bool lowPrioOverload();
 
     /*
-     * Total current size of the event queues
+     * Total current size of all event queues across all workers
      */
     unsigned int getQueueSize() const;
+
+    /* Get the number of worker threads */
+    int getNumWorkers() const { return numworkers; }
 
     /* Call from signal handlers to schedule related work on the worker thread */
     void dispatchSignal(EventReceiver* er, int signal, int value);
@@ -123,26 +161,30 @@ public:
                                     void* messageData = nullptr,
                                     Prio prio = Prio::NORMAL);
 
+    /* Run a specific worker thread's event loop */
+    void runWorker(int workerid);
+
+    /* Legacy: run worker 0 (used by Thread<WorkManager> if single-threaded) */
     void run();
+
 private:
-  Thread<WorkManager> thread;
+  int getWorkerIndex(EventReceiver* er) const;
+  bool workerOverload(int widx);
+  bool workerLowPrioOverload(int widx);
+  void notifyReady(int widx);
+
+  int numworkers;
+  std::vector<std::unique_ptr<WorkerData>> workers;
+  std::vector<WorkerRunner> runners;
+  std::vector<Thread<WorkerRunner>> threads;
   std::list<AsyncWorker> asyncworkers;
-  BlockingQueue<Event> dataqueue;
-  BlockingQueue<Event> highprioqueue;
-  BlockingQueue<Event> lowprioqueue;
   BlockingQueue<AsyncTask> asyncqueue;
   std::mutex readylock;
   std::mutex worklock;
   std::list<EventReceiver*> readynotify;
   SignalEvents signalevents;
-  Semaphore event;
-  Semaphore readdata;
-  Semaphore flush;
   DataBlockPool blockpool;
   bool running;
-  bool overloaded;
-  bool lowpriooverloaded;
-  std::vector<BlockingQueue<Event>*> eventqueues;
 };
 
 } // namespace Core

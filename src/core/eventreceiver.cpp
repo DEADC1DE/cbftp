@@ -4,7 +4,9 @@
 
 namespace Core {
 
-EventReceiver::EventReceiver() : workmanager(nullptr) {
+std::atomic<int> EventReceiver::nextaffinitykey{0};
+
+EventReceiver::EventReceiver() : affinitykey(nextaffinitykey.fetch_add(1, std::memory_order_relaxed)), workmanager(nullptr) {
 
 }
 
