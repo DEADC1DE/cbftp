@@ -441,18 +441,22 @@ JobStartResult Engine::newSpreadJob(int profile, const std::string& release, con
 }
 
 JobStartResult Engine::newRace(const std::string& release, const std::string& section, const std::list<std::string>& sites, bool reset, const std::list<std::string>& dlonlysites) {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   return newSpreadJob(SPREAD_RACE, release, section, sites, reset, dlonlysites);
 }
 
 JobStartResult Engine::newDistribute(const std::string& release, const std::string& section, const std::list<std::string>& sites, bool reset, const std::list<std::string>& dlonlysites) {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   return newSpreadJob(SPREAD_DISTRIBUTE, release, section, sites, reset, dlonlysites);
 }
 
 JobStartResult Engine::prepareRace(const std::string & release, const std::string& section, const std::list<std::string>& sites, bool reset, const std::list<std::string>& dlonlysites) {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   return newSpreadJob(SPREAD_PREPARE, release, section, sites, reset, dlonlysites);
 }
 
 JobStartResult Engine::startPreparedRace(unsigned int id) {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   std::list<std::shared_ptr<PreparedRace>>::iterator it = preparedraces.find(id);
   if (it != preparedraces.end()) {
     std::list<std::string> sites;
@@ -473,10 +477,12 @@ JobStartResult Engine::startPreparedRace(unsigned int id) {
 }
 
 void Engine::deletePreparedRace(unsigned int id) {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   preparedraces.erase(id);
 }
 
 JobStartResult Engine::startLatestPreparedRace() {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   if (preparedraces.size()) {
     std::shared_ptr<PreparedRace> preparedrace = preparedraces.back();
     return startPreparedRace(preparedraces.back()->getId());
@@ -485,6 +491,7 @@ JobStartResult Engine::startLatestPreparedRace() {
 }
 
 void Engine::toggleStartNextPreparedRace() {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   if (!startnextprepared) {
     startnextprepared = true;
     nextpreparedtimeremaining = getNextPreparedRaceStarterTimeout() * 1000;
@@ -498,30 +505,37 @@ void Engine::toggleStartNextPreparedRace() {
 }
 
 bool Engine::getNextPreparedRaceStarterEnabled() const {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   return startnextprepared;
 }
 
 int Engine::getNextPreparedRaceStarterTimeout() const {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   return startnextpreparedtimeout;
 }
 
 int Engine::getNextPreparedRaceStarterTimeRemaining() const {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   return nextpreparedtimeremaining / 1000;
 }
 
 JobStartResult Engine::newTransferJobDownload(const std::string& srcsite, const std::shared_ptr<FileList>& srcfilelist, const std::string& file, const Path& dstpath) {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   return newTransferJobDownload(srcsite, srcfilelist, file, dstpath, file);
 }
 
 JobStartResult Engine::newTransferJobUpload(const Path& srcpath, const std::string& file, const std::string& dstsite, const std::shared_ptr<FileList>& dstfilelist) {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   return newTransferJobUpload(srcpath, file, dstsite, dstfilelist, file);
 }
 
 JobStartResult Engine::newTransferJobFXP(const std::string& srcsite, const std::shared_ptr<FileList>& srcfilelist, const std::string& dstsite, const std::shared_ptr<FileList>& dstfilelist, const std::string& file) {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   return newTransferJobFXP(srcsite, srcfilelist, file, dstsite, dstfilelist, file);
 }
 
 JobStartResult Engine::newTransferJobDownload(const std::string& srcsite, const std::shared_ptr<FileList>& srcfilelist, const std::string& srcfile, const Path& dstpath, const std::string& dstfile) {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   std::list<std::string> infomessages;
   const std::shared_ptr<SiteLogic> sl = global->getSiteLogicManager()->getSiteLogic(srcsite);
   if (!sl) {
@@ -544,6 +558,7 @@ JobStartResult Engine::newTransferJobDownload(const std::string& srcsite, const 
 }
 
 JobStartResult Engine::newTransferJobDownload(const std::string& srcsite, const Path& srcpath, const std::string& srcsection, const std::string& srcfile, const Path& dstpath, const std::string& dstfile) {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   std::list<std::string> infomessages;
   const std::shared_ptr<SiteLogic> sl = global->getSiteLogicManager()->getSiteLogic(srcsite);
   if (!sl) {
@@ -569,6 +584,7 @@ JobStartResult Engine::newTransferJobDownload(const std::string& srcsite, const 
 }
 
 JobStartResult Engine::newTransferJobUpload(const Path& srcpath, const std::string& srcfile, const std::string& dstsite, const std::shared_ptr<FileList>& dstfilelist, const std::string& dstfile) {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   std::list<std::string> infomessages;
   const std::shared_ptr<SiteLogic> sl = global->getSiteLogicManager()->getSiteLogic(dstsite);
   if (!sl) {
@@ -591,6 +607,7 @@ JobStartResult Engine::newTransferJobUpload(const Path& srcpath, const std::stri
 }
 
 JobStartResult Engine::newTransferJobUpload(const Path& srcpath, const std::string& srcfile, const std::string& dstsite, const Path& dstpath, const std::string& dstsection, const std::string& dstfile) {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   std::list<std::string> infomessages;
   const std::shared_ptr<SiteLogic> sl = global->getSiteLogicManager()->getSiteLogic(dstsite);
   if (!sl) {
@@ -616,6 +633,7 @@ JobStartResult Engine::newTransferJobUpload(const Path& srcpath, const std::stri
 }
 
 JobStartResult Engine::newTransferJobFXP(const std::string& srcsite, const std::shared_ptr<FileList>& srcfilelist, const std::string& srcfile, const std::string& dstsite, const std::shared_ptr<FileList>& dstfilelist, const std::string& dstfile) {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   std::list<std::string> infomessages;
   const std::shared_ptr<SiteLogic> slsrc = global->getSiteLogicManager()->getSiteLogic(srcsite);
   const std::shared_ptr<SiteLogic> sldst = global->getSiteLogicManager()->getSiteLogic(dstsite);
@@ -643,6 +661,7 @@ JobStartResult Engine::newTransferJobFXP(const std::string& srcsite, const std::
 }
 
 JobStartResult Engine::newTransferJobFXP(const std::string& srcsite, const Path& srcpath, const std::string& srcsection, const std::string& srcfile, const std::string& dstsite, const Path& dstpath, const std::string& dstsection, const std::string& dstfile) {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   std::list<std::string> infomessages;
   const std::shared_ptr<SiteLogic> slsrc = global->getSiteLogicManager()->getSiteLogic(srcsite);
   const std::shared_ptr<SiteLogic> sldst = global->getSiteLogicManager()->getSiteLogic(dstsite);
@@ -676,6 +695,7 @@ JobStartResult Engine::newTransferJobFXP(const std::string& srcsite, const Path&
 }
 
 void Engine::removeSiteFromRace(const std::shared_ptr<Race> & race, const std::string & site) {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   if (!!race) {
     std::shared_ptr<SiteRace> sr = race->getSiteRace(site);
     if (!!sr) {
@@ -690,12 +710,14 @@ void Engine::removeSiteFromRace(const std::shared_ptr<Race> & race, const std::s
 }
 
 void Engine::removeSiteFromAllRunningSpreadJobs(const std::string& site) {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   for (std::list<std::shared_ptr<Race>>::const_iterator it = getCurrentRacesBegin(); it != getCurrentRacesEnd(); ++it) {
     removeSiteFromRace(*it, site);
   }
 }
 
 void Engine::removeSiteFromRaceDeleteFiles(const std::shared_ptr<Race> & race, const std::string & site, bool allfiles, bool deleteoncomplete) {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   if (!!race) {
     std::shared_ptr<SiteRace> sr = race->getSiteRace(site);
     if (!!sr) {
@@ -713,6 +735,7 @@ void Engine::removeSiteFromRaceDeleteFiles(const std::shared_ptr<Race> & race, c
 }
 
 void Engine::abortRace(const std::shared_ptr<Race> & race) {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   if (!!race && !race->isDone()) {
     race->abort();
     for (std::set<std::pair<std::shared_ptr<SiteRace>, std::shared_ptr<SiteLogic> > >::const_iterator it = race->begin(); it != race->end(); it++) {
@@ -727,6 +750,7 @@ void Engine::abortRace(const std::shared_ptr<Race> & race) {
 }
 
 void Engine::resetRace(const std::shared_ptr<Race> & race, bool hard) {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   if (!!race) {
     race->reset();
     for (std::set<std::pair<std::shared_ptr<SiteRace>, std::shared_ptr<SiteLogic> > >::const_iterator it = race->begin(); it != race->end(); it++) {
@@ -808,6 +832,7 @@ void Engine::clearSkipListCaches() {
 }
 
 void Engine::deleteOnAllSites(const std::shared_ptr<Race> & race, bool allfiles, bool deleteoncomplete) {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   std::list<std::shared_ptr<Site> > sites;
   for (std::set<std::pair<std::shared_ptr<SiteRace>, std::shared_ptr<SiteLogic> > >::const_iterator it = race->begin(); it != race->end(); it++) {
     if (deleteoncomplete || isIncompleteEnoughForDelete(race, it->first)) {
@@ -818,11 +843,13 @@ void Engine::deleteOnAllSites(const std::shared_ptr<Race> & race, bool allfiles,
 }
 
 bool Engine::isIncompleteEnoughForDelete(const std::shared_ptr<Race> & race, const std::shared_ptr<SiteRace> & siterace) const {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   return siterace->getStatus() != RaceStatus::DONE &&
          (!race->estimatedTotalSize() || (siterace->getTotalFileSize() * 100) / race->estimatedTotalSize() < MAX_PERCENTAGE_FOR_INCOMPLETE_DELETE);
 }
 
 void Engine::deleteOnSites(const std::shared_ptr<Race> & race, std::list<std::shared_ptr<Site> > delsites, bool allfiles) {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   if (!!race) {
     if (race->getStatus() == RaceStatus::RUNNING) {
       abortRace(race);
@@ -853,6 +880,7 @@ void Engine::deleteOnSites(const std::shared_ptr<Race> & race, std::list<std::sh
 }
 
 void Engine::abortTransferJob(const std::shared_ptr<TransferJob>& tj) {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   tj->abort();
   currenttransferjobs.remove(tj);
   global->getEventLog()->log("Engine", "Transfer job aborted: " + tj->getSrcFileName());
@@ -860,6 +888,7 @@ void Engine::abortTransferJob(const std::shared_ptr<TransferJob>& tj) {
 }
 
 void Engine::resetTransferJob(const std::shared_ptr<TransferJob>& tj) {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   tj->reset();
   bool current = false;
   for (const std::shared_ptr<TransferJob>& currenttj : currenttransferjobs) {
@@ -882,6 +911,7 @@ void Engine::resetTransferJob(const std::shared_ptr<TransferJob>& tj) {
 }
 
 void Engine::jobFileListRefreshed(SiteLogic * sls, const std::shared_ptr<CommandOwner> & commandowner, const std::shared_ptr<FileList>& fl) {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   switch (commandowner->classType()) {
     case COMMANDOWNER_SITERACE: {
       std::shared_ptr<SiteRace> sr = std::static_pointer_cast<SiteRace>(commandowner);
@@ -936,6 +966,7 @@ void Engine::jobFileListRefreshed(SiteLogic * sls, const std::shared_ptr<Command
 }
 
 bool Engine::transferJobActionRequest(const std::shared_ptr<SiteTransferJob> & stj) {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   std::shared_ptr<TransferJob> tj = stj->getTransferJob().lock();
   assert(tj);
   if (tj->getType() == TRANSFERJOB_FXP && stj->otherWantsList()) {
@@ -1014,7 +1045,53 @@ bool Engine::transferJobActionRequest(const std::shared_ptr<SiteTransferJob> & s
 }
 
 void Engine::raceActionRequest() {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   issueOptimalTransfers();
+}
+
+void Engine::asyncJobFileListRefreshed(SiteLogic* sls, const std::shared_ptr<CommandOwner>& commandowner, const std::shared_ptr<FileList>& fl) {
+  auto* msg = new EngineMsgFileListRefreshed{sls, commandowner, fl};
+  global->getWorkManager()->dispatchApplicationMessage(this, ENGINE_MSG_FILELIST_REFRESHED, msg);
+}
+
+void Engine::asyncRaceActionRequest() {
+  global->getWorkManager()->dispatchApplicationMessage(this, ENGINE_MSG_RACE_ACTION_REQUEST);
+}
+
+void Engine::asyncTransferJobActionRequest(const std::shared_ptr<SiteTransferJob>& stj) {
+  auto* msg = new EngineMsgTransferJobAction{stj};
+  global->getWorkManager()->dispatchApplicationMessage(this, ENGINE_MSG_TRANSFER_JOB_ACTION_REQUEST, msg);
+}
+
+void Engine::asyncTransferFailed(const std::shared_ptr<TransferStatus>& ts, int err) {
+  auto* msg = new EngineMsgTransferFailed{ts, err};
+  global->getWorkManager()->dispatchApplicationMessage(this, ENGINE_MSG_TRANSFER_FAILED, msg);
+}
+
+void Engine::receivedApplicationMessage(int messageId, void* messageData) {
+  switch (messageId) {
+    case ENGINE_MSG_FILELIST_REFRESHED: {
+      auto* msg = static_cast<EngineMsgFileListRefreshed*>(messageData);
+      jobFileListRefreshed(msg->sls, msg->commandowner, msg->fl);
+      delete msg;
+      break;
+    }
+    case ENGINE_MSG_RACE_ACTION_REQUEST:
+      raceActionRequest();
+      break;
+    case ENGINE_MSG_TRANSFER_JOB_ACTION_REQUEST: {
+      auto* msg = static_cast<EngineMsgTransferJobAction*>(messageData);
+      transferJobActionRequest(msg->stj);
+      delete msg;
+      break;
+    }
+    case ENGINE_MSG_TRANSFER_FAILED: {
+      auto* msg = static_cast<EngineMsgTransferFailed*>(messageData);
+      transferFailed(msg->ts, msg->err);
+      delete msg;
+      break;
+    }
+  }
 }
 
 void Engine::estimateRaceSizes() {
@@ -1631,6 +1708,7 @@ void Engine::issueOptimalTransfers() {
 }
 
 void Engine::transferFailed(const std::shared_ptr<TransferStatus> & ts, int err) {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   TransferStatusCallback * cb = ts->getCallback();
   if (cb && cb->callbackType() == CallbackType::RACE &&
       static_cast<Race *>(cb)->hasFailedTransfer(ts->getFile(), ts->getSourceFileList(), ts->getTargetFileList()))
@@ -1847,26 +1925,32 @@ void Engine::preSeedPotentialData(const std::shared_ptr<Race>& race) {
 }
 
 unsigned int Engine::preparedRaces() const {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   return preparedraces.size();
 }
 
 unsigned int Engine::currentRaces() const {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   return currentraces.size();
 }
 
 unsigned int Engine::allRaces() const {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   return allraces.size();
 }
 
 unsigned int Engine::currentTransferJobs() const {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   return currenttransferjobs.size();
 }
 
 unsigned int Engine::allTransferJobs() const {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   return alltransferjobs.size();
 }
 
 std::shared_ptr<Race> Engine::getRace(unsigned int id) const {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   std::list<std::shared_ptr<Race> >::const_iterator it = allraces.find(id);
   if (it != allraces.end()) {
     return *it;
@@ -1875,6 +1959,7 @@ std::shared_ptr<Race> Engine::getRace(unsigned int id) const {
 }
 
 std::shared_ptr<Race> Engine::getRace(const std::string& race) const {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   std::list<std::shared_ptr<Race> >::const_iterator it;
   for (it = allraces.begin(); it != allraces.end(); it++) {
     if ((*it)->getName() == race) {
@@ -1885,6 +1970,7 @@ std::shared_ptr<Race> Engine::getRace(const std::string& race) const {
 }
 
 std::shared_ptr<TransferJob> Engine::getTransferJob(unsigned int id) const {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   std::list<std::shared_ptr<TransferJob> >::const_iterator it = alltransferjobs.find(id);
   if (it != alltransferjobs.end()) {
     return *it;
@@ -1893,6 +1979,7 @@ std::shared_ptr<TransferJob> Engine::getTransferJob(unsigned int id) const {
 }
 
 std::shared_ptr<TransferJob> Engine::getTransferJob(const std::string& tj) const {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   std::list<std::shared_ptr<TransferJob> >::const_iterator it;
   for (it = alltransferjobs.begin(); it != alltransferjobs.end(); it++) {
     if ((*it)->getName() == tj) {
@@ -1942,7 +2029,38 @@ std::list<std::shared_ptr<TransferJob> >::const_iterator Engine::getTransferJobs
   return alltransferjobs.end();
 }
 
+std::list<std::shared_ptr<PreparedRace>> Engine::getPreparedRacesSnapshot() const {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
+  return std::list<std::shared_ptr<PreparedRace>>(preparedraces.begin(), preparedraces.end());
+}
+
+std::list<std::shared_ptr<Race>> Engine::getAllRacesSnapshot() const {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
+  return std::list<std::shared_ptr<Race>>(allraces.begin(), allraces.end());
+}
+
+std::list<std::shared_ptr<Race>> Engine::getCurrentRacesSnapshot() const {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
+  return std::list<std::shared_ptr<Race>>(currentraces.begin(), currentraces.end());
+}
+
+std::list<std::shared_ptr<Race>> Engine::getFinishedRacesSnapshot() const {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
+  return std::list<std::shared_ptr<Race>>(finishedraces.begin(), finishedraces.end());
+}
+
+std::list<std::shared_ptr<TransferJob>> Engine::getAllTransferJobsSnapshot() const {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
+  return std::list<std::shared_ptr<TransferJob>>(alltransferjobs.begin(), alltransferjobs.end());
+}
+
+std::list<std::shared_ptr<TransferJob>> Engine::getCurrentTransferJobsSnapshot() const {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
+  return std::list<std::shared_ptr<TransferJob>>(currenttransferjobs.begin(), currenttransferjobs.end());
+}
+
 void Engine::tick(int message) {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   if (startnextprepared && getNextPreparedRaceStarterTimeout() != 0) {
     nextpreparedtimeremaining -= POKEINTERVAL;
     if (nextpreparedtimeremaining <= 0) {
@@ -2082,6 +2200,7 @@ std::shared_ptr<Race> Engine::getCurrentRace(const std::string & release) const 
 }
 
 void Engine::addSiteToRace(const std::shared_ptr<Race>& race, const std::string& site, bool downloadonly) {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   const std::shared_ptr<SiteLogic> sl = global->getSiteLogicManager()->getSiteLogic(site);
   bool affil = sl->getSite()->isAffiliated(race->getGroup());
   if (sl->getSite()->getSkipList().check((sl->getSite()->getSectionPath(race->getSection()) / race->getName()).toString(),
@@ -2095,30 +2214,37 @@ void Engine::addSiteToRace(const std::shared_ptr<Race>& race, const std::string&
 }
 
 int Engine::getMaxPointsRaceTotal() const {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   return getMaxPointsFileSize() + getMaxPointsAvgSpeed() + getMaxPointsPriority() + getMaxPointsPercentageOwned();
 }
 
 int Engine::getMaxPointsFileSize() const {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   return maxpointsfilesize;
 }
 
 int Engine::getMaxPointsAvgSpeed() const {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   return maxpointsavgspeed;
 }
 
 int Engine::getMaxPointsPriority() const {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   return maxpointspriority;
 }
 
 int Engine::getMaxPointsPercentageOwned() const {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   return maxpointspercentageowned;
 }
 
 int Engine::getMaxPointsLowProgress() const {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   return maxpointslowprogress;
 }
 
 int Engine::getPriorityPoints(SitePriority priority) const {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   switch (priority) {
     case SitePriority::VERY_LOW:
       return 0;
@@ -2135,6 +2261,7 @@ int Engine::getPriorityPoints(SitePriority priority) const {
 }
 
 int Engine::getSpeedPoints(int avgspeed) const {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   if (maxavgspeed) {
     unsigned long long int pointsavgspeed = maxpointsavgspeed;
     pointsavgspeed *= avgspeed;
@@ -2145,31 +2272,38 @@ int Engine::getSpeedPoints(int avgspeed) const {
 }
 
 int Engine::getPreparedRaceExpiryTime() const {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   return preparedraceexpirytime;
 }
 
 void Engine::setPreparedRaceExpiryTime(int expirytime) {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   preparedraceexpirytime = expirytime;
 }
 
 void Engine::setNextPreparedRaceStarterTimeout(int timeout) {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   startnextpreparedtimeout = timeout;
 }
 
 int Engine::getMaxSpreadJobsHistory() const {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   return maxspreadjobshistory;
 }
 
 int Engine::getMaxTransferJobsHistory() const {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   return maxtransferjobshistory;
 }
 
 void Engine::setMaxSpreadJobsHistory(int jobs) {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   maxspreadjobshistory = jobs;
   rotateSpreadJobsHistory();
 }
 
 void Engine::setMaxTransferJobsHistory(int jobs) {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   maxtransferjobshistory = jobs;
   rotateTransferJobsHistory();
 }
@@ -2203,9 +2337,11 @@ void Engine::rotateTransferJobsHistory() {
 }
 
 int Engine::getMaxSpreadJobTimeSeconds() const {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   return maxspreadjobtimeseconds;
 }
 
 void Engine::setMaxSpreadJobTimeSeconds(int seconds) {
+  std::lock_guard<std::recursive_mutex> lock(enginemutex);
   maxspreadjobtimeseconds = seconds;
 }

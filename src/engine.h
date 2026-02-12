@@ -3,6 +3,7 @@
 #include <cassert>
 #include <list>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -45,6 +46,30 @@ struct JobStartResult {
   std::list<std::string> infomessages;
 };
 
+/* Message IDs for async Engine operations (message-passing from other threads) */
+enum EngineMsg {
+  ENGINE_MSG_FILELIST_REFRESHED = 1,
+  ENGINE_MSG_RACE_ACTION_REQUEST,
+  ENGINE_MSG_TRANSFER_JOB_ACTION_REQUEST,
+  ENGINE_MSG_TRANSFER_FAILED,
+};
+
+/* Data carriers for async messages */
+struct EngineMsgFileListRefreshed {
+  SiteLogic* sls;
+  std::shared_ptr<CommandOwner> commandowner;
+  std::shared_ptr<FileList> fl;
+};
+
+struct EngineMsgTransferJobAction {
+  std::shared_ptr<SiteTransferJob> stj;
+};
+
+struct EngineMsgTransferFailed {
+  std::shared_ptr<TransferStatus> ts;
+  int err;
+};
+
 class Engine : public Core::EventReceiver {
 public:
   Engine();
@@ -74,6 +99,13 @@ public:
   void deleteOnSites(const std::shared_ptr<Race>& race, std::list<std::shared_ptr<Site>>, bool allfiles = false);
   void abortTransferJob(const std::shared_ptr<TransferJob>& tj);
   void resetTransferJob(const std::shared_ptr<TransferJob>& tj);
+  /* Async message-passing variants (non-blocking, dispatched to Engine's worker thread) */
+  void asyncJobFileListRefreshed(SiteLogic* sls, const std::shared_ptr<CommandOwner>& commandowner, const std::shared_ptr<FileList>& fl);
+  void asyncRaceActionRequest();
+  void asyncTransferJobActionRequest(const std::shared_ptr<SiteTransferJob>& stj);
+  void asyncTransferFailed(const std::shared_ptr<TransferStatus>& ts, int err);
+  void receivedApplicationMessage(int messageId, void* messageData) override;
+  /* Direct call variants (blocking, caller holds enginemutex) */
   void jobFileListRefreshed(SiteLogic *, const std::shared_ptr<CommandOwner> & commandowner, const std::shared_ptr<FileList>& fl);
   bool transferJobActionRequest(const std::shared_ptr<SiteTransferJob> &);
   void raceActionRequest();
@@ -98,6 +130,13 @@ public:
   std::list<std::shared_ptr<Race>>::const_iterator getFinishedRacesEnd() const;
   std::list<std::shared_ptr<TransferJob>>::const_iterator getTransferJobsBegin() const;
   std::list<std::shared_ptr<TransferJob>>::const_iterator getTransferJobsEnd() const;
+  /* Thread-safe snapshot methods - return copies safe for iteration without holding locks */
+  std::list<std::shared_ptr<PreparedRace>> getPreparedRacesSnapshot() const;
+  std::list<std::shared_ptr<Race>> getAllRacesSnapshot() const;
+  std::list<std::shared_ptr<Race>> getCurrentRacesSnapshot() const;
+  std::list<std::shared_ptr<Race>> getFinishedRacesSnapshot() const;
+  std::list<std::shared_ptr<TransferJob>> getAllTransferJobsSnapshot() const;
+  std::list<std::shared_ptr<TransferJob>> getCurrentTransferJobsSnapshot() const;
   void tick(int);
   void addSiteToRace(const std::shared_ptr<Race>& race, const std::string& site, bool downloadonly);
   std::shared_ptr<ScoreBoard> getScoreBoard() const;
@@ -156,6 +195,7 @@ public:
   void clearSkipListCaches();
   void rotateSpreadJobsHistory();
   void rotateTransferJobsHistory();
+  mutable std::recursive_mutex enginemutex;
   JobList<std::shared_ptr<Race>> allraces;
   JobList<std::shared_ptr<Race>> currentraces;
   JobList<std::shared_ptr<Race>> finishedraces;
