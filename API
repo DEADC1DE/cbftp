@@ -156,6 +156,27 @@ their default values. Example:
 - Delete a site
     DELETE /sites/SITE1
 
+- Get traffic statistics for a site
+    GET /sites/SITE1/stats
+
+  Response:
+  {
+    "size_up_24h": 123456789,        // bytes uploaded in last 24h
+    "size_up_all": 1234567890,       // bytes uploaded all time
+    "size_down_24h": 123456789,      // bytes downloaded in last 24h
+    "size_down_all": 1234567890,     // bytes downloaded all time
+    "files_up_24h": 123,             // files uploaded in last 24h
+    "files_up_all": 1234,            // files uploaded all time
+    "files_down_24h": 123,           // files downloaded in last 24h
+    "files_down_all": 1234,          // files downloaded all time
+    "current_logins": 8,             // current active logins
+    "current_up": 2,                 // current active uploads
+    "current_down": 3,               // current active downloads
+    "max_logins": 10,                // max allowed logins
+    "max_sim_up": 5,                 // max simultaneous uploads
+    "max_sim_down": 5                // max simultaneous downloads
+  }
+
 - Send a raw command
     POST /raw
 

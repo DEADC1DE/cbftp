@@ -63,6 +63,7 @@ private:
   void handleSiteGet(RestApiCallback* cb, int connrequestid, const http::Request& request);
   void handleSitePatch(RestApiCallback* cb, int connrequestid, const http::Request& request);
   void handleSiteDelete(RestApiCallback* cb, int connrequestid, const http::Request& request);
+  void handleSiteStatsGet(RestApiCallback* cb, int connrequestid, const http::Request& request);
   void handleSpreadJobPost(RestApiCallback* cb, int connrequestid, const http::Request& request);
   void handleSpreadJobGet(RestApiCallback* cb, int connrequestid, const http::Request& request);
   void handleSpreadJobsGet(RestApiCallback* cb, int connrequestid, const http::Request& request);

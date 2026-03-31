@@ -974,6 +974,7 @@ RestApi::RestApi() : nextrequestid(0), notifyoncurrentrequest(false) {
   endpoints["/transferjobs/*"]["GET"] = &RestApi::handleTransferJobGet;
   endpoints["/transferjobs/*/reset"]["POST"] = &RestApi::handleTransferJobReset;
   endpoints["/transferjobs/*/abort"]["POST"] = &RestApi::handleTransferJobAbort;
+  endpoints["/sites/*/stats"]["GET"] = &RestApi::handleSiteStatsGet;
 
   global->getTickPoke()->startPoke(this, "RestApi", RESTAPI_TICK_INTERVAL_MS, 0);
 }
@@ -1260,6 +1261,41 @@ void RestApi::handleSiteDelete(RestApiCallback* cb, int connrequestid, const htt
   global->getSiteManager()->deleteSite(sitename);
   http::Response response(204);
   response.appendHeader("Content-Length", "0");
+  cb->requestHandled(connrequestid, response);
+}
+
+void RestApi::handleSiteStatsGet(RestApiCallback* cb, int connrequestid, const http::Request& request) {
+  Path path = request.getPath();
+  std::string sitename = path.level(1).toString();
+  std::shared_ptr<Site> site = global->getSiteManager()->getSite(sitename);
+  std::shared_ptr<SiteLogic> sl = global->getSiteLogicManager()->getSiteLogic(sitename);
+  if (!site || !sl) {
+    cb->requestHandled(connrequestid, notFoundResponse());
+    return;
+  }
+  nlohmann::json j;
+  // Traffic stats (bytes)
+  j["size_up_24h"] = site->getSizeUp().getLast24Hours();
+  j["size_up_all"] = site->getSizeUp().getAll();
+  j["size_down_24h"] = site->getSizeDown().getLast24Hours();
+  j["size_down_all"] = site->getSizeDown().getAll();
+  // File counts
+  j["files_up_24h"] = site->getFilesUp().getLast24Hours();
+  j["files_up_all"] = site->getFilesUp().getAll();
+  j["files_down_24h"] = site->getFilesDown().getLast24Hours();
+  j["files_down_all"] = site->getFilesDown().getAll();
+  // Current activity
+  j["current_logins"] = sl->getCurrLogins();
+  j["current_up"] = sl->getCurrUp();
+  j["current_down"] = sl->getCurrDown();
+  // Slot limits
+  j["max_logins"] = site->getMaxLogins();
+  j["max_sim_up"] = site->getInternMaxUp();
+  j["max_sim_down"] = site->getInternMaxDown();
+  http::Response response(200);
+  std::string jsondump = j.dump(2);
+  response.setBody(std::vector<char>(jsondump.begin(), jsondump.end()));
+  response.addHeader("Content-Type", "application/json");
   cb->requestHandled(connrequestid, response);
 }
 
