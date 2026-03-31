@@ -9,6 +9,7 @@
 #include "../../loadmonitor.h"
 #include "../../sitemanager.h"
 
+#include "../../core/iomanager.h"
 #include "../../core/polling.h"
 #include "../../core/sslmanager.h"
 
@@ -59,6 +60,7 @@ void InfoScreen::redraw() {
   vv->putStr(i++, 1, "Distribution tag: " + BuildInfo::tag());
   vv->putStr(i++, 1, "OpenSSL version: " + Core::SSLManager::version());
   vv->putStr(i++, 1, "Polling syscall: " + Core::Polling::type());
+  vv->putStr(i++, 1, std::string("System IPv6 support: ") + (Core::IOManager::ipv6Enabled() ? "yes" : "no"));
   vv->putStr(i++, 1, std::string("Data file encryption: ") + (global->getSettingsLoaderSaver()->getState() == DataFileState::EXISTS_DECRYPTED ? "Enabled" : "Disabled"));
   i++;
   vv->putStr(i++, 1, "Traffic measurements");
@@ -80,7 +82,6 @@ void InfoScreen::redraw() {
   vv->putStr(i++, 1, "Current worker queue size: " + std::to_string(global->getLoadMonitor()->getCurrentWorkerQueueSize()));
   vv->putStr(i++, 1, "Current performance level: " + std::to_string(global->getLoadMonitor()->getCurrentRecommendedPerformanceLevel()));
   vv->putStr(i++, 1, "Current file list refresh rate: " + std::to_string(global->getLoadMonitor()->getCurrentFileListRefreshRate()) + "/s");
-  vv->putStr(i++, 1, "Session highest list refresh rate: " + std::to_string(global->getStatistics()->getMaxFileListRefreshRate()) + "/s");
 }
 
 void InfoScreen::command(const std::string& command, const std::string& arg) {

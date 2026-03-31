@@ -35,7 +35,6 @@ public:
   unsigned int getSpreadJobs() const;
   unsigned int getTransferJobs() const;
   unsigned int getFileListRefreshRate() const;
-  unsigned int getMaxFileListRefreshRate() const;
   void setSpreadJobs(unsigned int);
   void setTransferJobs(unsigned int);
   void resetHourlyStats();
@@ -51,5 +50,4 @@ private:
   unsigned int transferjobs;
   unsigned int currentsecondrefreshtrack;
   unsigned int lastsecondrefreshtrack;
-  unsigned int maxfilelistrefreshrate;
 };

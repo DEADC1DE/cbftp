@@ -32,6 +32,16 @@ bool LocalUpload::engage(TransferMonitor* tm, int localtransferid, const Path& p
   return sockid != -1;
 }
 
+void LocalUpload::reserve() {
+  tm = nullptr;
+  ftpconn = nullptr;
+  path = "";
+  filename = "";
+  inuse = true;
+  filepos = 0;
+  fileopened = false;
+}
+
 void LocalUpload::init(TransferMonitor* tm, int localtransferid, FTPConn* ftpconn, const Path& path, const std::string& filename, bool ssl, bool passivemode, int port) {
   this->tm = tm;
   this->ftpconn = ftpconn;
@@ -72,7 +82,6 @@ void LocalUpload::FDInterDisconnected(int sockid, Core::DisconnectType reason, c
   if (fileopened) {
     filestream.close();
   }
-  deactivate();
   tm->localError(details);
   tm->sourceError(TM_ERR_OTHER);
   this->sockid = -1;
@@ -105,7 +114,6 @@ void LocalUpload::sendChunk() {
     tm->localInfo("Upload finished, closing connection");
     global->getIOManager()->closeSocket(sockid);
     tm->sourceComplete();
-    deactivate();
     return;
   }
   filepos += gcount;
@@ -123,7 +131,6 @@ void LocalUpload::FDFail(int sockid, const std::string& error) {
   if (sockid == -1 || sockid != this->sockid) {
     return;
   }
-  deactivate();
   tm->localError(error);
   tm->sourceError(TM_ERR_OTHER);
   this->sockid = -1;
@@ -136,7 +143,6 @@ void LocalUpload::FDInterData(int sockid, char* data, unsigned int len) {
   if (fileopened) {
     filestream.close();
   }
-  deactivate();
   global->getIOManager()->closeSocket(sockid);
   tm->localError("Received data unexpectedly, closing connection");
   tm->sourceError(TM_ERR_OTHER);
@@ -160,7 +166,6 @@ void LocalUpload::disconnect() {
   if (fileopened) {
     filestream.close();
   }
-  deactivate();
   global->getIOManager()->closeSocket(sockid);
   tm->localInfo("Closing connection");
   tm->sourceError(TM_ERR_OTHER);

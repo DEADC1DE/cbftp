@@ -46,6 +46,17 @@ bool LocalDownload::engage(TransferMonitor* tm, int localtransferid, int storeid
   return sockid != -1;
 }
 
+void LocalDownload::reserve() {
+  tm = nullptr;
+  ftpconn = nullptr;
+  path = "";
+  filename = "";
+  inuse = true;
+  bufpos = 0;
+  filesize = 0;
+  fileopened = false;
+}
+
 void LocalDownload::init(TransferMonitor* tm, int localtransferid, FTPConn* ftpconn, const Path& path, const std::string& filename, bool inmemory, int storeid, bool ssl, bool passivemode, int port) {
   this->tm = tm;
   this->ftpconn = ftpconn;
@@ -93,7 +104,6 @@ void LocalDownload::FDInterDisconnected(int sockid, Core::DisconnectType reason,
       filestream.close();
     }
   }
-  deactivate();
   if (inmemory) {
     Core::BinaryData out(buf, buf + bufpos);
     ls->storeContent(storeid, out);
@@ -137,7 +147,6 @@ void LocalDownload::FDFail(int sockid, const std::string& error) {
   if (this->sockid == -1 || sockid != this->sockid) {
     return;
   }
-  deactivate();
   tm->localError(error);
   tm->targetError(TM_ERR_OTHER);
   this->sockid = -1;
@@ -196,7 +205,6 @@ void LocalDownload::disconnect() {
   if (fileopened) {
     filestream.close();
   }
-  deactivate();
   global->getIOManager()->closeSocket(sockid);
   tm->localInfo("Closing connection");
   tm->targetError(TM_ERR_OTHER);

@@ -1,0 +1,2 @@
+buildinfo.o: buildinfo.cpp buildinfo.h
+buildinfo.h:

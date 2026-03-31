@@ -46,7 +46,7 @@
 #define MAX_CHECKS_ROW_PRIO_LOW 2
 #define MAX_CHECKS_ROW_PRIO_NORMAL 3
 #define MAX_CHECKS_ROW_PRIO_HIGH 4
-#define MAX_CHECKS_ROW_PRIO_VERY_HIGH 20
+#define MAX_CHECKS_ROW_PRIO_VERY_HIGH 5
 
 // maximum number of ready requests available to be checked out, unless below
 #define MAX_REQUEST_READY_QUEUE_SIZE 10
@@ -123,20 +123,20 @@ private:
   ConnStateTracker& cst;
 };
 
-TransferType getTransferType(bool isdownload, const std::shared_ptr<CommandOwner>& co) {
-  TransferType type(TransferType::REGULAR);
+TransferOriginType getTransferOriginType(bool isdownload, const std::shared_ptr<CommandOwner>& co) {
+  TransferOriginType type(TransferOriginType::REGULAR);
   if (isdownload) {
     if (!!co) {
       if (co->classType() == COMMANDOWNER_SITERACE) {
         if (std::static_pointer_cast<SiteRace>(co)->isDownloadOnly()) {
-          type = TransferType::PRE;
+          type = TransferOriginType::PRE;
         }
         else if (std::static_pointer_cast<SiteRace>(co)->isDone()) {
-          type = TransferType::COMPLETE;
+          type = TransferOriginType::COMPLETE;
         }
       }
       else if (co->classType() == COMMANDOWNER_TRANSFERJOB) {
-        type = TransferType::TRANSFERJOB;
+        type = TransferOriginType::TRANSFERJOB;
       }
     }
   }
@@ -307,10 +307,12 @@ void SiteLogic::tick(int message) {
     }
   }
   refreshgovernor.timePassed(TICK_INTERVAL);
-  if (!currentraces.empty() && !idlingconns.empty()) {
-    for (int i = idlingconns.size() - 1; i >= 0; --i) {
-      unsigned int winner = idlingconns[i];
-      handleSpreadJobs(winner, false);
+  if (refreshgovernor.refreshAllowed() && !currentraces.empty() && !idlingconns.empty()) {
+    unsigned int winindex = rand() % idlingconns.size();
+    unsigned int winner = idlingconns[winindex];
+    handleSpreadJobs(winner, false);
+    if(connstatetracker[winner].isLocked() || conns[winner]->isProcessing()) {
+      idlingconns.erase(idlingconns.begin() + winindex);
     }
   }
   for (unsigned int i : idlingconns) {
@@ -515,8 +517,8 @@ void SiteLogic::commandSuccess(int id, FTPConnState state) {
   connstatetracker[id].resetIdleTime();
   std::list<SiteLogicRequest>::iterator it;
   if (!refreshgovernor.refreshAllowed() && refreshgovernor.immediateRefreshAllowed()) {
-    if (state != FTPConnState::LIST && state != FTPConnState::LIST_COMPLETE &&
-        state != FTPConnState::PRET_LIST && state != FTPConnState::STAT)
+    if (state != FTPConnState::CWD && state != FTPConnState::LIST && state != FTPConnState::LIST_COMPLETE &&
+        state != FTPConnState::PRET_LIST)
     {
       connstatetracker[id].setRefreshToken();
       refreshgovernor.useRefresh();
@@ -743,8 +745,8 @@ void SiteLogic::commandFail(int id, FailureType failuretype) {
   connstatetracker[id].resetIdleTime();
   FTPConnState state = conns[id]->getState();
   if (!refreshgovernor.refreshAllowed() && refreshgovernor.immediateRefreshAllowed()) {
-    if (state != FTPConnState::LIST && state != FTPConnState::LIST_COMPLETE &&
-        state != FTPConnState::PRET_LIST && state != FTPConnState::STAT)
+    if (state != FTPConnState::CWD && state != FTPConnState::LIST && state != FTPConnState::LIST_COMPLETE &&
+        state != FTPConnState::PRET_LIST)
     {
       connstatetracker[id].setRefreshToken();
       refreshgovernor.useRefresh();
@@ -839,6 +841,10 @@ void SiteLogic::commandFail(int id, FailureType failuretype) {
         handleConnection(id);
         return;
       }
+      if (currentco && currentco->classType() == COMMANDOWNER_TRANSFERJOB) {
+        handleConnection(id);
+        return;
+      }
       if (connstatetracker[id].hasTransfer() && !connstatetracker[id].transferInitialized()) {
         handleConnection(id);
         return;
@@ -883,32 +889,32 @@ void SiteLogic::commandFail(int id, FailureType failuretype) {
       }
       break;
     case FTPConnState::PRET_RETR:
-      handleTransferFail(id, CST_DOWNLOAD, TM_ERR_PRET);
+      handleTransferFail(id, TransferType::DOWNLOAD, TM_ERR_PRET);
       return;
     case FTPConnState::PRET_STOR:
       if (failuretype == FailureType::DUPE) {
-        handleTransferFail(id, CST_UPLOAD, TM_ERR_DUPE);
+        handleTransferFail(id, TransferType::UPLOAD, TM_ERR_DUPE);
       }
       else {
-        handleTransferFail(id, CST_UPLOAD, TM_ERR_PRET);
+        handleTransferFail(id, TransferType::UPLOAD, TM_ERR_PRET);
       }
       return;
     case FTPConnState::RETR:
-      handleTransferFail(id, CST_DOWNLOAD, TM_ERR_RETRSTOR);
+      handleTransferFail(id, TransferType::DOWNLOAD, TM_ERR_RETRSTOR);
       return;
     case FTPConnState::RETR_COMPLETE:
-      handleTransferFail(id, CST_DOWNLOAD, TM_ERR_RETRSTOR_COMPLETE);
+      handleTransferFail(id, TransferType::DOWNLOAD, TM_ERR_RETRSTOR_COMPLETE);
       return;
     case FTPConnState::STOR:
       if (failuretype == FailureType::DUPE) {
-        handleTransferFail(id, CST_UPLOAD, TM_ERR_DUPE);
+        handleTransferFail(id, TransferType::UPLOAD, TM_ERR_DUPE);
       }
       else {
-        handleTransferFail(id, CST_UPLOAD, TM_ERR_RETRSTOR);
+        handleTransferFail(id, TransferType::UPLOAD, TM_ERR_RETRSTOR);
       }
       return;
     case FTPConnState::STOR_COMPLETE:
-      handleTransferFail(id, CST_UPLOAD, TM_ERR_RETRSTOR_COMPLETE);
+      handleTransferFail(id, TransferType::UPLOAD, TM_ERR_RETRSTOR_COMPLETE);
       return;
     case FTPConnState::WIPE:
       if (connstatetracker[id].hasRequest()) {
@@ -946,15 +952,15 @@ void SiteLogic::commandFail(int id, FailureType failuretype) {
       return;
     case FTPConnState::LIST:
       checkFailListRequest(id);
-      handleTransferFail(id, CST_LIST, TM_ERR_RETRSTOR);
+      handleTransferFail(id, TransferType::LIST, TM_ERR_RETRSTOR);
       return;
     case FTPConnState::PRET_LIST:
       checkFailListRequest(id);
-      handleTransferFail(id, CST_LIST, TM_ERR_PRET);
+      handleTransferFail(id, TransferType::LIST, TM_ERR_PRET);
       return;
     case FTPConnState::LIST_COMPLETE:
       checkFailListRequest(id);
-      handleTransferFail(id, CST_LIST, TM_ERR_RETRSTOR_COMPLETE);
+      handleTransferFail(id, TransferType::LIST, TM_ERR_RETRSTOR_COMPLETE);
       return;
     default:
       disconnected(id);
@@ -987,7 +993,7 @@ void SiteLogic::handleTransferFail(int id, int err) {
   handleTransferFail(id, connstatetracker[id].getTransferType(), err);
 }
 
-void SiteLogic::handleTransferFail(int id, int type, int err) {
+void SiteLogic::handleTransferFail(int id, TransferType type, int err) {
   assert(connstatetracker[id].isListOrTransferLocked());
   if (connstatetracker[id].hasTransfer() && connstatetracker[id].transferInitialized() &&
       connstatetracker[id].getTransferPassive() &&
@@ -997,7 +1003,7 @@ void SiteLogic::handleTransferFail(int id, int type, int err) {
   }
   std::shared_ptr<FileList> fl = connstatetracker[id].getTransferFileList();
   reportTransferErrorAndFinish(id, type, err);
-  if (type == CST_UPLOAD) {
+  if (type == TransferType::UPLOAD) {
     assert(fl);
     handlePostUpload(id, fl);
   }
@@ -1010,12 +1016,12 @@ void SiteLogic::reportTransferErrorAndFinish(int id, int err) {
   reportTransferErrorAndFinish(id, connstatetracker[id].getTransferType(), err);
 }
 
-void SiteLogic::reportTransferErrorAndFinish(int id, int type, int err) {
+void SiteLogic::reportTransferErrorAndFinish(int id, TransferType type, int err) {
   std::shared_ptr<CommandOwner> co = connstatetracker[id].getCommandOwner();
   std::shared_ptr<FileList> fl = connstatetracker[id].getTransferFileList();
   if (!connstatetracker[id].getTransferAborted()) {
     switch (type) {
-      case CST_DOWNLOAD:
+      case TransferType::DOWNLOAD:
         connstatetracker[id].getTransferMonitor()->sourceError((TransferError)err);
         transferComplete(id, true, err != TM_ERR_CLEANUP);
         if (err == TM_ERR_CLEANUP) {
@@ -1023,10 +1029,10 @@ void SiteLogic::reportTransferErrorAndFinish(int id, int type, int err) {
           delayedcommands.back().set("returndownloadslot", currtime + TRANSFER_SLOT_CLEANUP_DELAY);
         }
         break;
-      case CST_LIST:
+      case TransferType::LIST:
         connstatetracker[id].getTransferMonitor()->sourceError((TransferError)err);
         break;
-      case CST_UPLOAD:
+      case TransferType::UPLOAD:
         connstatetracker[id].getTransferMonitor()->targetError((TransferError)err);
         transferComplete(id, false, err != TM_ERR_CLEANUP);
         if (err == TM_ERR_CLEANUP) {
@@ -1043,7 +1049,7 @@ void SiteLogic::reportTransferErrorAndFinish(int id, int type, int err) {
       setRequestReady(id, nullptr, false);
     }
   }
-  if (type == CST_UPLOAD && err == TM_ERR_DUPE && site->useXDUPE() && co && fl) {
+  if (type == TransferType::UPLOAD && err == TM_ERR_DUPE && site->useXDUPE() && co && fl) {
     const std::list<std::string> & xdupelist = conns[id]->getXDUPEList();
     for (std::list<std::string>::const_iterator it = xdupelist.begin(); it != xdupelist.end(); it++) {
       fl->touchFile(*it, "XDUPE");
@@ -1139,7 +1145,7 @@ bool SiteLogic::handlePreTransfer(int id) {
   const Path & transferpath = fl->getPath();
   std::shared_ptr<CommandOwner> co = connstatetracker[id].getCommandOwner();
   if (conns[id]->getCurrentPath() != transferpath) {
-    if (connstatetracker[id].getTransferType() == CST_UPLOAD &&
+    if (connstatetracker[id].getTransferType() == TransferType::UPLOAD &&
         fl->getState() == FileListState::NONEXISTENT)
     {
       std::pair<Path, Path> pathparts;
@@ -1261,8 +1267,8 @@ bool SiteLogic::handleTransferJobs(int id) {
     std::shared_ptr<TransferJob> ptj = tj->getTransferJob().lock();
     int type = ptj->getType();
     if (((type == TRANSFERJOB_DOWNLOAD || type == TRANSFERJOB_FXP) &&
-         ptj->getSrc()->getCurrDown() < ptj->maxSlots()) ||
-        (type == TRANSFERJOB_UPLOAD && getCurrUp() < ptj->maxSlots()))
+         ptj->getSrc()->getCurrDown(tj) < ptj->maxSlots()) ||
+        (type == TRANSFERJOB_UPLOAD && getCurrUp(tj) < ptj->maxSlots()))
     {
       targetjobs.push_back(tj);
     }
@@ -1333,21 +1339,16 @@ bool SiteLogic::handleSpreadJob(int id) {
     connstatetracker[id].setLastChecked(race);
     triedraces.insert(race);
     if (!connstatetracker[id].hasRefreshToken()) {
-      if (site->getPriority() == SitePriority::VERY_HIGH) {
-        if (connstatetracker[id].getTimePassed() >= 50) {
-          connstatetracker[id].setRefreshToken();
-        }
-        else {
-          refresh = false;
-        }
-      }
-      else if (refreshgovernor.refreshAllowed()) {
+      if (refreshgovernor.refreshAllowed()) {
         refreshgovernor.useRefresh();
         connstatetracker[id].setRefreshToken();
       }
       else {
         refresh = false;
       }
+    }
+    else {
+      refreshgovernor.useRefresh();
     }
     const Path & currentpath = conns[id]->getCurrentPath();
     const Path & racepath = race->getPath();
@@ -1599,7 +1600,7 @@ void SiteLogic::initTransfer(int id) {
     handleTransferFail(id, TM_ERR_OTHER);
     return;
   }
-  int transfertype = connstatetracker[id].getTransferType();
+  TransferType transfertype = connstatetracker[id].getTransferType();
   if (!connstatetracker[id].transferInitialized()) {
     connstatetracker[id].initializeTransfer();
   }
@@ -1608,7 +1609,7 @@ void SiteLogic::initTransfer(int id) {
   bool sscnmode = conns[id]->getSSCNMode();
   bool passive = connstatetracker[id].getTransferPassive();
   Status status = connstatetracker[id].getTransferMonitor()->getStatus();
-  if (transfertype != CST_LIST) {
+  if (transfertype != TransferType::LIST) {
     if (handlePreTransfer(id)) {
       return;
     }
@@ -1658,13 +1659,13 @@ void SiteLogic::initTransfer(int id) {
   else {
     if (site->needsPRET()) {
       switch (transfertype) {
-        case CST_DOWNLOAD:
+        case TransferType::DOWNLOAD:
           conns[id]->doPRETRETR(connstatetracker[id].getTransferFile());
           break;
-        case CST_UPLOAD:
+        case TransferType::UPLOAD:
           conns[id]->doPRETSTOR(connstatetracker[id].getTransferFile());
           break;
-        case CST_LIST:
+        case TransferType::LIST:
           conns[id]->doPRETLIST();
           break;
       }
@@ -1958,7 +1959,7 @@ bool SiteLogic::lockUploadConn(const std::shared_ptr<FileList>& fl, int* ret, co
 }
 
 bool SiteLogic::lockTransferConn(const std::shared_ptr<FileList>& fl, int* ret, TransferMonitor* tm, const std::shared_ptr<CommandOwner>& co, bool isdownload) {
-  TransferType type = getTransferType(isdownload, co);
+  TransferOriginType type = getTransferOriginType(isdownload, co);
   int lastreadyid = -1;
   bool foundreadythread = false;
   const Path & path = fl->getPath();
@@ -2013,10 +2014,10 @@ bool SiteLogic::lockTransferConn(const std::shared_ptr<FileList>& fl, int* ret, 
 }
 
 void SiteLogic::returnConn(int id, bool istransfer) {
-  if (connstatetracker[id].isTransferLocked() && connstatetracker[id].getTransferType() == CST_DOWNLOAD) {
+  if (connstatetracker[id].isTransferLocked() && connstatetracker[id].getTransferType() == TransferType::DOWNLOAD) {
     transferComplete(id, true);
   }
-  else if (connstatetracker[id].isTransferLocked() && connstatetracker[id].getTransferType() == CST_UPLOAD) {
+  else if (connstatetracker[id].isTransferLocked() && connstatetracker[id].getTransferType() == TransferType::UPLOAD) {
     transferComplete(id, false);
   }
   if (istransfer) {
@@ -2029,9 +2030,11 @@ void SiteLogic::returnConn(int id, bool istransfer) {
 }
 
 void SiteLogic::registerDownloadLock(int id, const std::shared_ptr<FileList>& fl, const std::shared_ptr<CommandOwner>& co, TransferMonitor* tm) {
-  TransferType type = getTransferType(true, co);
+  TransferOriginType type = getTransferOriginType(true, co);
   available++;
-  assert(getSlot(true, type));
+  bool success = getSlot(true, type);
+  (void)(success); // unused
+  assert(success);
   connstatetracker[id].lockForTransfer(tm, fl, co, true);
   conns[id]->setRawBufferCallback(tm);
   handleConnection(id);
@@ -2082,7 +2085,7 @@ void SiteLogic::setNumConnections(unsigned int num) {
   ptrack->updateSlots(site->getMaxDown());
 }
 
-int SiteLogic::downloadSlotsAvailable(TransferType type) const {
+int SiteLogic::downloadSlotsAvailable(TransferOriginType type) const {
   if (!available) {
     return 0;
   }
@@ -2092,16 +2095,16 @@ int SiteLogic::downloadSlotsAvailable(TransferType type) const {
   }
   int free = 0;
   switch (type) {
-    case TransferType::REGULAR:
+    case TransferOriginType::REGULAR:
       free = static_cast<int>(site->getMaxDown());
       break;
-    case TransferType::PRE:
+    case TransferOriginType::PRE:
       free = static_cast<int>(site->getMaxDownPre());
       break;
-    case TransferType::COMPLETE:
+    case TransferOriginType::COMPLETE:
       free = static_cast<int>(site->getMaxDownComplete());
       break;
-    case TransferType::TRANSFERJOB:
+    case TransferOriginType::TRANSFERJOB:
       free = static_cast<int>(site->getMaxDownTransferJob());
       break;
   }
@@ -2112,7 +2115,7 @@ int SiteLogic::downloadSlotsAvailable(TransferType type) const {
   return free;
 }
 
-bool SiteLogic::downloadSlotAvailable(TransferType type) const {
+bool SiteLogic::downloadSlotAvailable(TransferOriginType type) const {
   return downloadSlotsAvailable(type) > 0;
 }
 
@@ -2146,12 +2149,12 @@ void SiteLogic::transferComplete(int id, bool isdownload, bool returntransferslo
   conns[id]->unsetRawBufferCallback();
 }
 
-bool SiteLogic::getSlot(bool isdownload, TransferType type) {
+bool SiteLogic::getSlot(bool isdownload, TransferOriginType type) {
   if (isdownload) {
-    if ((type == TransferType::REGULAR && slotsdn >= static_cast<int>(site->getMaxDown())) ||
-        (type == TransferType::PRE && slotsdn >= static_cast<int>(site->getMaxDownPre())) ||
-        (type == TransferType::COMPLETE && slotsdn >= static_cast<int>(site->getMaxDownComplete())) ||
-        (type == TransferType::TRANSFERJOB && slotsdn >= static_cast<int>(site->getMaxDownTransferJob())))
+    if ((type == TransferOriginType::REGULAR && slotsdn >= static_cast<int>(site->getMaxDown())) ||
+        (type == TransferOriginType::PRE && slotsdn >= static_cast<int>(site->getMaxDownPre())) ||
+        (type == TransferOriginType::COMPLETE && slotsdn >= static_cast<int>(site->getMaxDownComplete())) ||
+        (type == TransferOriginType::TRANSFERJOB && slotsdn >= static_cast<int>(site->getMaxDownTransferJob())))
     {
       return false;
     }
@@ -2171,7 +2174,7 @@ void SiteLogic::pushPotential(int score, const std::string & file, const std::sh
   ptrack->pushPotential(score, file, dst, dst->getSite()->getMaxUp());
 }
 
-bool SiteLogic::potentialCheck(int score, TransferType type) {
+bool SiteLogic::potentialCheck(int score, TransferOriginType type) {
   int dnavail = downloadSlotsAvailable(type);
   int max = ptrack->getMaxAvailablePotential();
   float factor = 0;
@@ -2222,6 +2225,31 @@ int SiteLogic::getCurrDown() const {
 
 int SiteLogic::getCurrUp() const {
   return slotsup;
+}
+
+int SiteLogic::getCurrDown(const std::shared_ptr<CommandOwner>& co) const {
+  int count = 0;
+  for (unsigned int i = 0; i < connstatetracker.size(); i++) {
+    if (connstatetracker[i].isTransferLocked() && connstatetracker[i].getCommandOwner() == co &&
+        connstatetracker[i].getTransferType() == TransferType::DOWNLOAD)
+    {
+      ++count;
+    }
+  }
+  return count;
+}
+
+int SiteLogic::getCurrUp(const std::shared_ptr<CommandOwner>& co) const {
+  int count = 0;
+  for (unsigned int i = 0; i < connstatetracker.size(); i++) {
+    if (connstatetracker[i].isTransferLocked() && connstatetracker[i].getCommandOwner() == co &&
+        connstatetracker[i].getTransferType() == TransferType::UPLOAD)
+    {
+      ++count;
+    }
+  }
+  return count;
+
 }
 
 int SiteLogic::getCleanlyClosedConnectionsCount() const {
@@ -2293,13 +2321,15 @@ void SiteLogic::finishTransferGracefullyPrematurely(int id) {
   assert(connstatetracker[id].hasTransfer() &&
                !connstatetracker[id].isListLocked());
   switch (connstatetracker[id].getTransferType()) {
-    case CST_DOWNLOAD:
+    case TransferType::DOWNLOAD:
       connstatetracker[id].getTransferMonitor()->sourceComplete();
       transferComplete(id, true);
       break;
-    case CST_UPLOAD:
+    case TransferType::UPLOAD:
       connstatetracker[id].getTransferMonitor()->targetComplete();
       transferComplete(id, false);
+      break;
+    case TransferType::LIST:
       break;
   }
   connstatetracker[id].finishTransfer();
