@@ -619,6 +619,14 @@ unsigned int Race::getBestCompletionPercentage() const {
   return best;
 }
 
+unsigned int Race::getTotalFilesEstimate() const {
+  return guessedtotalnumfiles;
+}
+
+unsigned int Race::getMaxFilesProgress() const {
+  return maxnumfilessiteprogress;
+}
+
 bool Race::hasFailedTransfer(const std::string& filename, const std::shared_ptr<FileList>& fls, const std::shared_ptr<FileList>& fld) const {
   FailedTransferKey matchall = FailedTransferKey(filename, FailedTransferSecond(nullptr, fld));
   std::unordered_map<FailedTransferKey, TransferAttemptCounter, FailedTransferHash>::const_iterator it = transferattempts.find(matchall);

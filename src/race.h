@@ -150,6 +150,8 @@ class Race : public Core::EventReceiver, public TransferStatusCallback {
     unsigned int getWorstCompletionPercentage() const;
     unsigned int getAverageCompletionPercentage() const;
     unsigned int getBestCompletionPercentage() const;
+    unsigned int getTotalFilesEstimate() const;
+    unsigned int getMaxFilesProgress() const;
     bool hasFailedTransfer(const std::string& filename, const std::shared_ptr<FileList>& fls, const std::shared_ptr<FileList>& fld) const;
     bool hasTransferRetryBackoff(const std::string& filename, const std::shared_ptr<FileList>& fls, const std::shared_ptr<FileList>& fld) const;
     bool failedTransfersCleared() const;

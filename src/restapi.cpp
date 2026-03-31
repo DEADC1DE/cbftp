@@ -1532,9 +1532,28 @@ void RestApi::handleSpreadJobGet(RestApiCallback* cb, int connrequestid, const h
   j["time_started_full"] = spreadjob->getTimeStampFull();
   j["time_spent_seconds"] = spreadjob->getTimeSpent();
   j["size_estimated_bytes"] = spreadjob->estimatedTotalSize();
+  j["total_files_estimate"] = spreadjob->getTotalFilesEstimate();
+  j["max_files_progress"] = spreadjob->getMaxFilesProgress();
+  j["transferred_files"] = spreadjob->getTransferredFiles();
   j["percentage_complete_worst"] = spreadjob->getWorstCompletionPercentage();
   j["percentage_complete_average"] = spreadjob->getAverageCompletionPercentage();
   j["percentage_complete_best"] = spreadjob->getBestCompletionPercentage();
+  
+  // Per-site progress data
+  nlohmann::json progress = nlohmann::json::object();
+  for (it = spreadjob->begin(); it != spreadjob->end(); ++it) {
+    std::shared_ptr<SiteRace> sr = it->first;
+    nlohmann::json siteprogress;
+    siteprogress["files_up"] = sr->getFilesUp();
+    siteprogress["files_down"] = sr->getFilesDown();
+    siteprogress["size_up"] = sr->getSizeUp();
+    siteprogress["size_down"] = sr->getSizeDown();
+    siteprogress["speed_up"] = sr->getSpeedUp();
+    siteprogress["speed_down"] = sr->getSpeedDown();
+    siteprogress["status"] = raceStatusToString(sr->getStatus());
+    progress[sr->getSiteName()] = siteprogress;
+  }
+  j["progress"] = progress;
   http::Response response(200);
   std::string jsondump = j.dump(2);
   response.setBody(std::vector<char>(jsondump.begin(), jsondump.end()));
